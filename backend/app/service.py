@@ -12,7 +12,6 @@ from .data import FixtureRepository, repository
 from .models import DisruptionContext, MitigationAction, MitigationOption
 
 
-DEMO_DATE = date(2026, 9, 29)
 REVENUE_AT_RISK_DEFINITION = (
     "Sum of affected open-order value where the required part cannot arrive "
     "before the customer-required date. Safety stock is protected."
@@ -21,6 +20,14 @@ REVENUE_AT_RISK_DEFINITION = (
 
 class EvidenceError(LookupError):
     """Raised when governed data is not sufficient to answer safely."""
+
+
+class GovernanceConflictError(ValueError):
+    """Raised when workflow state changed or conflicts with an active action."""
+
+
+class GovernanceAuthorizationError(PermissionError):
+    """Raised when an authenticated actor violates a workflow authorization rule."""
 
 
 def _now() -> str:
@@ -32,7 +39,7 @@ def _id(prefix: str) -> str:
 
 
 def _parse_date(value: str) -> date:
-    return date.fromisoformat(value)
+    return date.fromisoformat(value[:10])
 
 
 class SupplyChainService:
@@ -99,7 +106,12 @@ class SupplyChainService:
             raise EvidenceError(f"No governed plant record exists for {plant_id}.")
         return plant
 
-    def trace_order_impact(self, part_id: str, delay_days: int) -> dict[str, Any]:
+    def trace_order_impact(
+        self,
+        part_id: str,
+        delay_days: int,
+        supplier_id: str | None = None,
+    ) -> dict[str, Any]:
         if delay_days < 1 or delay_days > 90:
             raise ValueError("delay_days must be between 1 and 90")
         part = self._part(part_id)
@@ -113,9 +125,25 @@ class SupplyChainService:
             for shipment in self.repo.all("shipments")
             if shipment["part_id"] == part_id
             and shipment["status"] == "IN_TRANSIT"
-            and shipment["supplier_id"] in active_disrupted_suppliers
         ]
-        if not inbound:
+        candidate_suppliers = {
+            shipment["supplier_id"]
+            for shipment in inbound
+            if shipment["supplier_id"] in active_disrupted_suppliers
+        }
+        if supplier_id:
+            disrupted_suppliers = {supplier_id}
+            if supplier_id not in candidate_suppliers:
+                raise EvidenceError(
+                    f"No active governed disruption and inbound supply exists for {supplier_id} / {part_id}."
+                )
+        else:
+            if len(candidate_suppliers) > 1:
+                raise ValueError(
+                    f"supplier_id is required because multiple disrupted suppliers affect {part_id}."
+                )
+            disrupted_suppliers = candidate_suppliers
+        if not inbound or not disrupted_suppliers:
             raise EvidenceError(f"No confirmed inbound supply exists for {part_id}.")
 
         customers = {item["customer_id"]: item for item in self.repo.all("customers")}
@@ -140,13 +168,18 @@ class SupplyChainService:
             plant_id: max(item["on_hand"] - item["safety_stock"], 0)
             for plant_id, item in inventory_by_plant.items()
         }
-        delayed_eta_by_plant: dict[str, date] = {}
+        projected_inbound_by_plant: dict[str, list[dict[str, Any]]] = {}
         for shipment in inbound:
-            projected_eta = _parse_date(shipment["promised_date"]) + timedelta(days=delay_days)
+            projected_eta = _parse_date(shipment["promised_date"])
+            if shipment["supplier_id"] in disrupted_suppliers:
+                projected_eta += timedelta(days=delay_days)
             plant_id = shipment["plant_id"]
-            delayed_eta_by_plant[plant_id] = min(
-                delayed_eta_by_plant.get(plant_id, projected_eta),
-                projected_eta,
+            projected_inbound_by_plant.setdefault(plant_id, []).append(
+                {
+                    **shipment,
+                    "projected_eta": projected_eta,
+                    "scenario_delayed": shipment["supplier_id"] in disrupted_suppliers,
+                }
             )
 
         affected: list[dict[str, Any]] = []
@@ -155,30 +188,46 @@ class SupplyChainService:
         for order in orders:
             plant_id = order["plant_id"]
             required_date = _parse_date(order["required_date"])
-            delayed_eta = delayed_eta_by_plant.get(plant_id)
-            can_arrive = bool(delayed_eta and delayed_eta <= required_date)
-            if not can_arrive:
-                cumulative_demand_by_plant[plant_id] = (
-                    cumulative_demand_by_plant.get(plant_id, 0) + order["quantity"]
-                )
-            can_cover_from_stock = (
-                allocatable_by_plant.get(plant_id, 0)
-                >= cumulative_demand_by_plant.get(plant_id, 0)
+            cumulative_demand_by_plant[plant_id] = (
+                cumulative_demand_by_plant.get(plant_id, 0) + order["quantity"]
+            )
+            inbound_by_required_date = sum(
+                shipment["quantity"]
+                for shipment in projected_inbound_by_plant.get(plant_id, [])
+                if shipment["projected_eta"] <= required_date
+            )
+            available_supply = allocatable_by_plant.get(plant_id, 0) + inbound_by_required_date
+            shortage_quantity = max(
+                cumulative_demand_by_plant[plant_id] - available_supply,
+                0,
             )
 
-            if can_arrive or can_cover_from_stock:
-                protected.append({**order, "protection_reason": "Supply is available before the required date."})
+            if shortage_quantity == 0:
+                protected.append(
+                    {
+                        **order,
+                        "protection_reason": "Quantity-aware supply is sufficient by the required date.",
+                        "available_supply_by_required_date": available_supply,
+                        "cumulative_demand": cumulative_demand_by_plant[plant_id],
+                    }
+                )
                 continue
 
             customer = customers.get(order["customer_id"])
             if not customer:
                 raise EvidenceError(f"Customer evidence missing for order {order['order_id']}.")
+            disrupted_arrivals = [
+                shipment["projected_eta"]
+                for shipment in projected_inbound_by_plant.get(plant_id, [])
+                if shipment["scenario_delayed"]
+            ]
+            delayed_eta = min(disrupted_arrivals, default=None)
             days_late = (delayed_eta - required_date).days if delayed_eta else None
             severity = "CRITICAL" if customer["tier"] == "Strategic" or (days_late or 0) >= 7 else "HIGH"
             reason = (
                 f"Delayed inbound lands {days_late} days after required date"
-                if days_late is not None
-                else "No confirmed supply arrives before the required date"
+                if days_late is not None and days_late > 0
+                else f"Available supply is {shortage_quantity} units below cumulative demand"
             )
             affected.append(
                 {
@@ -189,6 +238,9 @@ class SupplyChainService:
                     "impact_severity": severity,
                     "reason": reason,
                     "projected_supply_date": delayed_eta.isoformat() if delayed_eta else None,
+                    "available_supply_by_required_date": available_supply,
+                    "cumulative_demand": cumulative_demand_by_plant[plant_id],
+                    "shortage_quantity": shortage_quantity,
                     "source_system": "ERP + TMS + GOVERNED_METRICS",
                 }
             )
@@ -196,6 +248,7 @@ class SupplyChainService:
         return {
             "part_id": part_id,
             "part_name": part["part_name"],
+            "supplier_id": next(iter(disrupted_suppliers)),
             "delay_days": delay_days,
             "affected_sales_orders": affected,
             "protected_sales_orders": protected,
@@ -220,18 +273,24 @@ class SupplyChainService:
         for row in inventory_rows:
             available = max(row["on_hand"] - row["safety_stock"], 0)
             coverage_days = floor(available / row["daily_demand"]) if row["daily_demand"] else 0
-            shortage_date = DEMO_DATE + timedelta(days=coverage_days + 1)
-            primary_source = next(
-                (
-                    item for item in self.repo.all("supplier_parts")
-                    if item["part_id"] == part_id
-                    and item["plant_id"] == row["plant_id"]
-                    and item["supplier_id"] == "SUP-042"
-                ),
-                None,
+            as_of_date = _parse_date(row["snapshot_at"])
+            shortage_date = as_of_date + timedelta(days=coverage_days + 1)
+            sources = [
+                item for item in self.repo.all("supplier_parts")
+                if item["part_id"] == part_id
+                and item["plant_id"] == row["plant_id"]
+                and item["approved"] is True
+            ]
+            sources.sort(
+                key=lambda item: (
+                    item["supplier_id"] not in disruptions,
+                    item["lead_time_days"],
+                    item["supplier_id"],
+                )
             )
+            primary_source = sources[0] if sources else None
             lead_time_days = primary_source["lead_time_days"] if primary_source else 0
-            lead_time_window_end = DEMO_DATE + timedelta(days=lead_time_days)
+            lead_time_window_end = as_of_date + timedelta(days=lead_time_days)
             inbound: list[dict[str, Any]] = []
             for shipment in shipments:
                 if shipment["part_id"] != part_id or shipment["plant_id"] != row["plant_id"] or shipment["status"] != "IN_TRANSIT":
@@ -291,35 +350,104 @@ class SupplyChainService:
         part_id: str,
         plant_id: str,
         delay_days: int = 14,
+        disrupted_supplier_id: str | None = None,
     ) -> dict[str, Any]:
         self._part(part_id)
         self._plant(plant_id)
+        if disrupted_supplier_id is None:
+            active_suppliers = {
+                event["supplier_id"]
+                for event in self.repo.all("disruption_events")
+                if event["status"] == "ACTIVE"
+            }
+            candidates = {
+                item["supplier_id"]
+                for item in self.repo.all("supplier_parts")
+                if item["part_id"] == part_id
+                and item["plant_id"] == plant_id
+                and item["supplier_id"] in active_suppliers
+            }
+            if len(candidates) > 1:
+                raise ValueError(
+                    "disrupted_supplier_id is required because multiple disruptions affect this part and plant."
+                )
+            disrupted_supplier_id = next(iter(candidates), None)
         alternatives = [
             item for item in self.repo.all("supplier_parts")
             if item["part_id"] == part_id
             and item["plant_id"] == plant_id
             and item["approved"] is True
-            and item["supplier_id"] != "SUP-042"
+            and item["supplier_id"] != disrupted_supplier_id
         ]
         if not alternatives:
             raise EvidenceError(f"No approved alternative is available for {part_id} at {plant_id}.")
 
         supplier_names = {item["supplier_id"]: item["supplier_name"] for item in self.repo.all("suppliers")}
-        at_risk = self.trace_order_impact(part_id, delay_days)["affected_sales_orders"]
-        shortage_quantity = sum(order["quantity"] for order in at_risk)
+        at_risk = self.trace_order_impact(
+            part_id,
+            delay_days,
+            disrupted_supplier_id,
+        )["affected_sales_orders"]
+        at_risk = [order for order in at_risk if order["plant_id"] == plant_id]
+        shortage_quantity = max(
+            (order["shortage_quantity"] for order in at_risk),
+            default=0,
+        )
+        inventory_snapshot = next(
+            (
+                item for item in self.repo.all("inventory")
+                if item["part_id"] == part_id and item["plant_id"] == plant_id
+            ),
+            None,
+        )
+        if not inventory_snapshot:
+            raise EvidenceError(f"Inventory timing evidence is missing for {part_id} / {plant_id}.")
+        as_of_date = _parse_date(inventory_snapshot["snapshot_at"])
         ranked = sorted(alternatives, key=lambda item: (item["lead_time_days"], -item["available_capacity"]))
         results = []
-        for rank, alternative in enumerate(ranked, start=1):
+        for alternative in ranked:
             capacity = alternative["available_capacity"]
-            coverage = min(round(capacity / shortage_quantity * 100), 100) if shortage_quantity else 100
+            arrival_date = as_of_date + timedelta(days=alternative["lead_time_days"])
+            if shortage_quantity == 0:
+                results.append(
+                    {
+                        **alternative,
+                        "supplier_name": supplier_names[alternative["supplier_id"]],
+                        "recommendation_rank": len(results) + 1,
+                        "coverage_percent": 0,
+                        "estimated_protected_revenue": 0,
+                        "projected_arrival_date": arrival_date.isoformat(),
+                        "shortage_quantity": 0,
+                        "protected_quantity": 0,
+                        "tradeoff": "Qualified contingency; the selected scenario currently requires no mitigation.",
+                        "approval_evidence": "SUPPLIER_PART_PLANT qualification record",
+                        "source_system": "Supplier Master",
+                    }
+                )
+                continue
+            timely_orders = [
+                order for order in at_risk
+                if arrival_date <= _parse_date(order["required_date"])
+            ]
+            if not timely_orders:
+                continue
             remaining_capacity = capacity
             protected_revenue = 0.0
-            for order in sorted(at_risk, key=lambda item: (item["required_date"], item["order_id"])):
+            previous_shortage = 0
+            timely_shortage = 0
+            for order in sorted(timely_orders, key=lambda item: (item["required_date"], item["order_id"])):
                 if remaining_capacity <= 0:
                     break
-                covered_quantity = min(remaining_capacity, order["quantity"])
-                protected_revenue += order["order_value"] * covered_quantity / order["quantity"]
+                incremental_shortage = max(order["shortage_quantity"] - previous_shortage, 0)
+                previous_shortage = max(previous_shortage, order["shortage_quantity"])
+                timely_shortage += incremental_shortage
+                covered_quantity = min(remaining_capacity, incremental_shortage)
+                if incremental_shortage:
+                    protected_revenue += order["order_value"] * covered_quantity / incremental_shortage
                 remaining_capacity -= covered_quantity
+            protected_quantity = min(capacity, timely_shortage)
+            coverage = min(round(protected_quantity / shortage_quantity * 100), 100)
+            rank = len(results) + 1
             if rank == 1:
                 tradeoff = "Fastest qualified response with the strongest available coverage."
             elif coverage == 100:
@@ -333,14 +461,23 @@ class SupplyChainService:
                     "recommendation_rank": rank,
                     "coverage_percent": coverage,
                     "estimated_protected_revenue": round(protected_revenue),
+                    "projected_arrival_date": arrival_date.isoformat(),
+                    "shortage_quantity": shortage_quantity,
+                    "protected_quantity": protected_quantity,
                     "tradeoff": tradeoff,
                     "approval_evidence": "SUPPLIER_PART_PLANT qualification record",
                     "source_system": "Supplier Master",
                 }
             )
+        if not results:
+            raise EvidenceError(
+                f"Approved alternatives exist for {part_id} / {plant_id}, but none can arrive before an exposed order is due."
+            )
         return {
             "part_id": part_id,
             "plant_id": plant_id,
+            "disrupted_supplier_id": disrupted_supplier_id,
+            "mitigation_required": shortage_quantity > 0,
             "approved_alternatives": results,
             "excluded_unapproved_count": len(
                 [
@@ -352,7 +489,63 @@ class SupplyChainService:
             "source_system": self.repo.source_system,
         }
 
-    def ask_supply_chain(self, question: str) -> dict[str, Any]:
+    def compare_delay_scenarios(
+        self,
+        supplier_id: str,
+        delay_days: list[int] | tuple[int, ...] = (3, 7, 14, 21),
+    ) -> dict[str, Any]:
+        unique_delays = sorted(set(delay_days))
+        if not unique_delays or len(unique_delays) > 8:
+            raise ValueError("Provide between one and eight delay scenarios.")
+        if any(days < 1 or days > 90 for days in unique_delays):
+            raise ValueError("Every delay scenario must be between 1 and 90 days.")
+
+        scenarios = []
+        for days in unique_delays:
+            analysis = self.analyze_supplier_delay(
+                supplier_id,
+                days,
+                record_audit=False,
+            )
+            summary = analysis["risk_summary"]
+            scenarios.append(
+                {
+                    "delay_days": days,
+                    "severity": summary["severity"],
+                    "revenue_at_risk": summary["revenue_at_risk"],
+                    "orders_at_risk": summary["impacted_orders"],
+                    "plants_at_risk": len(analysis["affected_plants"]),
+                    "strategic_customers_at_risk": len(
+                        [
+                            customer
+                            for customer in analysis["affected_customers"]
+                            if customer["tier"] == "Strategic"
+                        ]
+                    ),
+                    "source_references": analysis["source_references"],
+                }
+            )
+
+        first_exposure = next(
+            (item for item in scenarios if item["revenue_at_risk"] > 0),
+            None,
+        )
+        return {
+            "supplier_id": supplier_id,
+            "scenarios": scenarios,
+            "first_exposure_delay_days": (
+                first_exposure["delay_days"] if first_exposure else None
+            ),
+            "metric_definition": REVENUE_AT_RISK_DEFINITION,
+            "source_system": self.repo.source_system,
+            "generated_at": _now(),
+        }
+
+    def ask_supply_chain(
+        self,
+        question: str,
+        actor: str = "Governed conversation router",
+    ) -> dict[str, Any]:
         """Route a natural-language question only to governed deterministic tools."""
 
         normalized = " ".join(question.strip().split())
@@ -369,7 +562,7 @@ class SupplyChainService:
             correlation_id = _id("WF")
             audit = self._audit(
                 "CONVERSATION_REJECTED_BY_POLICY",
-                "Governed conversation router",
+                actor,
                 "Rejected a request that attempted to bypass a governed boundary.",
                 correlation_id,
             )
@@ -402,8 +595,14 @@ class SupplyChainService:
                     "approved_alternatives",
                     "Include both a part ID and plant ID, for example PRT-AX14 at PLT-PUN.",
                     ["part_id", "plant_id"],
+                    actor,
                 )
-            alternatives = self.list_approved_alternatives(part_id, plant_id)
+            alternatives = self.list_approved_alternatives(
+                part_id,
+                plant_id,
+                delay_days=delay_days or 14,
+                disrupted_supplier_id=supplier_id,
+            )
             ranked = alternatives["approved_alternatives"]
             result = {
                 "status": "ANSWERED",
@@ -433,6 +632,7 @@ class SupplyChainService:
                     "inventory_risk",
                     "Include a governed part ID, for example PRT-AX14.",
                     ["part_id"],
+                    actor,
                 )
             inventory = self.get_inventory_risk(part_id, plant_id)["inventory_risk"]
             result = {
@@ -477,6 +677,7 @@ class SupplyChainService:
                     "supplier_delay_impact",
                     "Include a supplier ID and explicit delay, for example SUP-042 delayed by 14 days.",
                     missing,
+                    actor,
                 )
             analysis = self.analyze_supplier_delay(supplier_id, delay_days)
             summary = analysis["risk_summary"]
@@ -506,11 +707,12 @@ class SupplyChainService:
                 "unknown",
                 "Ask about a supplier delay, revenue/order impact, inventory risk, OTD, or approved alternatives.",
                 ["supported_intent"],
+                actor,
             )
 
         audit = self._audit(
             "CONVERSATIONAL_ANSWER_GENERATED",
-            "Governed conversation router",
+            actor,
             f"Answered natural-language intent {result['intent']} using {', '.join(result['tool_calls'])}.",
             correlation_id,
         )
@@ -531,10 +733,11 @@ class SupplyChainService:
         intent: str,
         answer: str,
         missing_fields: list[str],
+        actor: str,
     ) -> dict[str, Any]:
         audit = self._audit(
             "CONVERSATION_NEEDS_CLARIFICATION",
-            "Governed conversation router",
+            actor,
             f"Refused to infer required fields for intent {intent}: {', '.join(missing_fields)}.",
             correlation_id,
         )
@@ -557,6 +760,7 @@ class SupplyChainService:
         delay_days: int,
         *,
         record_audit: bool = True,
+        actor: str = "Supply Chain Management MCP Server",
     ) -> dict[str, Any]:
         if delay_days < 1 or delay_days > 90:
             raise ValueError("delay_days must be between 1 and 90")
@@ -577,7 +781,7 @@ class SupplyChainService:
         impacted_orders = []
         protected_orders = []
         for part_id in affected_part_ids:
-            impact = self.trace_order_impact(part_id, delay_days)
+            impact = self.trace_order_impact(part_id, delay_days, supplier_id)
             impacted_orders.extend(impact["affected_sales_orders"])
             protected_orders.extend(impact["protected_sales_orders"])
         impacted_orders.sort(key=lambda item: (-item["order_value"], item["order_id"]))
@@ -608,6 +812,8 @@ class SupplyChainService:
                     "delayed_eta": (_parse_date(shipment["promised_date"]) + timedelta(days=delay_days)).isoformat(),
                     "status": "DELAYED",
                     "source_system": shipment["source_system"],
+                    "observed_at": shipment.get("updated_at"),
+                    "evidence_status": "SCENARIO_PROJECTION",
                 }
             )
 
@@ -620,6 +826,7 @@ class SupplyChainService:
                 "detail": item["detail"],
                 "source_system": item["source_system"],
                 "observed_at": item["observed_at"],
+                "evidence_status": "RECORDED",
             }
             for item in documents
         ]
@@ -627,11 +834,12 @@ class SupplyChainService:
             evidence.append(
                 {
                     "reference_id": shipment["shipment_id"],
-                    "source_type": "Shipment exception",
-                    "title": f"{plants_by_id[shipment['plant_id']]['city']} inbound ETA moved",
-                    "detail": f"{shipment['quantity']} units of {shipment['part_id']} moved from {shipment['original_eta']} to {shipment['delayed_eta']}.",
+                    "source_type": "Shipment scenario",
+                    "title": f"{plants_by_id[shipment['plant_id']]['city']} projected inbound ETA",
+                    "detail": f"Scenario projects {shipment['quantity']} units of {shipment['part_id']} from {shipment['original_eta']} to {shipment['delayed_eta']}.",
                     "source_system": shipment["source_system"],
-                    "observed_at": "2026-09-29T08:24:00+05:30",
+                    "observed_at": shipment["observed_at"],
+                    "evidence_status": shipment["evidence_status"],
                 }
             )
         metric_source = (
@@ -647,6 +855,7 @@ class SupplyChainService:
                 "detail": REVENUE_AT_RISK_DEFINITION,
                 "source_system": metric_source,
                 "observed_at": _now(),
+                "evidence_status": "DERIVED",
             }
         )
 
@@ -699,7 +908,7 @@ class SupplyChainService:
         if record_audit:
             audit = self._audit(
                 "INVESTIGATION_COMPLETED",
-                "Supply Chain Management MCP Server",
+                actor,
                 f"Governed impact analysis completed for {supplier_id} / {delay_days} days.",
                 correlation_id,
             )
@@ -763,6 +972,21 @@ class SupplyChainService:
             raise EvidenceError(
                 f"No active governed disruption exists for {disruption_context.supplier_id}."
             )
+        self.repo.refresh_workflow_state()
+        duplicate = next(
+            (
+                item for item in self.repo.mitigation_actions
+                if item["disruption_id"] == disruption["disruption_id"]
+                and item["part_id"] == selected_option.part_id
+                and item["plant_id"] == selected_option.plant_id
+                and item["status"] == "PENDING_APPROVAL"
+            ),
+            None,
+        )
+        if duplicate:
+            raise GovernanceConflictError(
+                f"Pending mitigation {duplicate['action_id']} already covers this disruption, part, and plant."
+            )
         action_id = _id("ACT")
         audit_id = _id("AUD")
         rationale = selected_option.tradeoff or (
@@ -799,6 +1023,20 @@ class SupplyChainService:
         self.repo.create_action_with_audit(action.model_dump(), event)
         return action
 
+    def list_mitigations(self, status: str | None = None) -> dict[str, Any]:
+        self.repo.refresh_workflow_state()
+        actions = deepcopy(self.repo.mitigation_actions)
+        if status:
+            actions = [item for item in actions if item["status"] == status]
+        actions.sort(key=lambda item: item["created_at"], reverse=True)
+        return {
+            "mitigations": actions,
+            "count": len(actions),
+            "status_filter": status,
+            "source_system": self.repo.source_system,
+            "generated_at": _now(),
+        }
+
     def approve_mitigation(
         self,
         action_id: str,
@@ -809,7 +1047,12 @@ class SupplyChainService:
         idempotency_key: str | None = None,
     ) -> MitigationAction:
         actor_id = approver_id or approver.lower().replace(" ", ".")
-        cache_key = f"approve:{action_id}:{idempotency_key}" if idempotency_key else None
+        cache_key = (
+            f"approve:{action_id}:{actor_id}:{idempotency_key}"
+            if idempotency_key
+            else None
+        )
+        self.repo.refresh_workflow_state()
         with self.repo.lock:
             if cache_key and cache_key in self.repo.idempotency_results:
                 return MitigationAction.model_validate(deepcopy(self.repo.idempotency_results[cache_key]))
@@ -817,13 +1060,17 @@ class SupplyChainService:
             if not action:
                 raise EvidenceError(f"Mitigation action {action_id} does not exist.")
             if action["status"] != "PENDING_APPROVAL":
-                raise ValueError(f"Mitigation action {action_id} is already {action['status']}.")
+                raise GovernanceConflictError(
+                    f"Mitigation action {action_id} is already {action['status']}."
+                )
             if expected_version is not None and action["version"] != expected_version:
-                raise ValueError(
+                raise GovernanceConflictError(
                     f"Mitigation action {action_id} changed from version {expected_version} to {action['version']}; reload before deciding."
                 )
             if action["owner_id"] == actor_id:
-                raise ValueError("Separation-of-duties policy forbids the draft owner from approving it.")
+                raise GovernanceAuthorizationError(
+                    "Separation-of-duties policy forbids the draft owner from approving it."
+                )
             qualification = next(
                 (
                     item for item in self.repo.all("supplier_parts")
@@ -858,12 +1105,17 @@ class SupplyChainService:
                 entity_id=action_id,
             )
             snapshot["audit_id"] = audit["audit_id"]
-            self.repo.apply_decision_with_audit(
-                snapshot,
-                audit,
-                cache_key,
-                previous_version,
-            )
+            try:
+                self.repo.apply_decision_with_audit(
+                    snapshot,
+                    audit,
+                    cache_key,
+                    previous_version,
+                )
+            except ValueError as exc:
+                if "changed in Snowflake" in str(exc):
+                    raise GovernanceConflictError(str(exc)) from exc
+                raise
         return MitigationAction.model_validate(snapshot)
 
     def return_mitigation_for_revision(
@@ -876,7 +1128,12 @@ class SupplyChainService:
         idempotency_key: str | None = None,
     ) -> MitigationAction:
         actor_id = reviewer_id or reviewer.lower().replace(" ", ".")
-        cache_key = f"revise:{action_id}:{idempotency_key}" if idempotency_key else None
+        cache_key = (
+            f"revise:{action_id}:{actor_id}:{idempotency_key}"
+            if idempotency_key
+            else None
+        )
+        self.repo.refresh_workflow_state()
         with self.repo.lock:
             if cache_key and cache_key in self.repo.idempotency_results:
                 return MitigationAction.model_validate(deepcopy(self.repo.idempotency_results[cache_key]))
@@ -884,9 +1141,11 @@ class SupplyChainService:
             if not action:
                 raise EvidenceError(f"Mitigation action {action_id} does not exist.")
             if action["status"] != "PENDING_APPROVAL":
-                raise ValueError(f"Mitigation action {action_id} is already {action['status']}.")
+                raise GovernanceConflictError(
+                    f"Mitigation action {action_id} is already {action['status']}."
+                )
             if expected_version is not None and action["version"] != expected_version:
-                raise ValueError(
+                raise GovernanceConflictError(
                     f"Mitigation action {action_id} changed from version {expected_version} to {action['version']}; reload before deciding."
                 )
             previous_version = action["version"]
@@ -907,12 +1166,17 @@ class SupplyChainService:
                 entity_id=action_id,
             )
             snapshot["audit_id"] = audit["audit_id"]
-            self.repo.apply_decision_with_audit(
-                snapshot,
-                audit,
-                cache_key,
-                previous_version,
-            )
+            try:
+                self.repo.apply_decision_with_audit(
+                    snapshot,
+                    audit,
+                    cache_key,
+                    previous_version,
+                )
+            except ValueError as exc:
+                if "changed in Snowflake" in str(exc):
+                    raise GovernanceConflictError(str(exc)) from exc
+                raise
         return MitigationAction.model_validate(snapshot)
 
     def demo_bundle(self, supplier_id: str, delay_days: int) -> dict[str, Any]:
@@ -929,6 +1193,7 @@ class SupplyChainService:
             results = self.list_approved_alternatives(
                 *pair,
                 delay_days=delay_days,
+                disrupted_supplier_id=supplier_id,
             )["approved_alternatives"]
             alternatives.extend(results)
         alternatives.sort(key=lambda item: (item["lead_time_days"], -item["coverage_percent"]))

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -46,6 +46,7 @@ import type {
   Evidence,
   Identity,
   Mitigation,
+  ScenarioComparison,
   ToastState,
 } from './types'
 
@@ -56,6 +57,19 @@ const money = new Intl.NumberFormat('en-US', {
 })
 
 const shortMoney = (value: number) => `$${Math.round(value / 1000)}K`
+const previewScenarios: ScenarioComparison = {
+  supplier_id: 'SUP-042',
+  scenarios: [
+    { delay_days: 3, severity: 'MONITORED', revenue_at_risk: 0, orders_at_risk: 0, plants_at_risk: 0, strategic_customers_at_risk: 0, source_references: ['DOC-042-09'] },
+    { delay_days: 7, severity: 'HIGH', revenue_at_risk: 436000, orders_at_risk: 2, plants_at_risk: 2, strategic_customers_at_risk: 2, source_references: ['DOC-042-09', 'SHP-8801', 'SHP-8802'] },
+    { delay_days: 14, severity: 'CRITICAL', revenue_at_risk: 586000, orders_at_risk: 3, plants_at_risk: 2, strategic_customers_at_risk: 2, source_references: ['DOC-042-09', 'SHP-8801', 'SHP-8802'] },
+    { delay_days: 21, severity: 'CRITICAL', revenue_at_risk: 754000, orders_at_risk: 4, plants_at_risk: 2, strategic_customers_at_risk: 2, source_references: ['DOC-042-09', 'SHP-8801', 'SHP-8802'] },
+  ],
+  first_exposure_delay_days: 7,
+  metric_definition: 'Protected stock plus on-time inbound supply must satisfy cumulative demand.',
+  source_system: 'UNVERIFIED_PREVIEW',
+  generated_at: '2026-09-29T10:30:00+05:30',
+}
 const prettyDate = (value: string) =>
   new Intl.DateTimeFormat('en-US', { day: '2-digit', month: 'short' }).format(new Date(value))
 const prettyTime = (value: string) =>
@@ -223,6 +237,7 @@ function App() {
   const [evidenceFilter, setEvidenceFilter] = useState('All evidence')
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null)
   const [mitigation, setMitigation] = useState<Mitigation | null>(null)
+  const [pendingMitigations, setPendingMitigations] = useState<Mitigation[]>([])
   const [drafting, setDrafting] = useState(false)
   const [approving, setApproving] = useState(false)
   const [returning, setReturning] = useState(false)
@@ -231,7 +246,27 @@ function App() {
   const [question, setQuestion] = useState('What revenue is at risk if SUP-042 is delayed by 14 days?')
   const [asking, setAsking] = useState(false)
   const [conversation, setConversation] = useState<ConversationAnswer | null>(null)
+  const [scenarioComparison, setScenarioComparison] = useState<ScenarioComparison>(previewScenarios)
   const [toast, setToast] = useState<ToastState | null>(null)
+  const isDemoIdentity = !identity || identity.identity_source === 'ALLOWLISTED_DEMO_PRINCIPAL'
+  const canDraft = identity?.roles.includes('SUPPLY_PLANNER') ?? false
+  const canApprove = identity?.roles.includes('MITIGATION_APPROVER') ?? false
+  const activeName = identity?.display_name ?? actorProfiles[actorId].name
+  const activeTitle = identity?.title ?? actorProfiles[actorId].title
+  const activeInitials = activeName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+
+  const refreshApprovalInbox = useCallback(async () => {
+    const response = await fetch('/api/mitigations?status=PENDING_APPROVAL', { headers: { 'X-Demo-Actor': actorId } })
+    if (!response.ok) throw new Error(await apiError(response, 'Approval inbox unavailable'))
+    const payload = await response.json() as { mitigations: Mitigation[] }
+    setPendingMitigations(payload.mitigations)
+    setMitigation((current) => {
+      const refreshedCurrent = payload.mitigations.find((item) => item.action_id === current?.action_id)
+      if (refreshedCurrent) return refreshedCurrent
+      if (current && current.status !== 'PENDING_APPROVAL') return current
+      return payload.mitigations[0] ?? null
+    })
+  }, [actorId])
 
   useEffect(() => {
     fetch('/api/demo?supplier_id=SUP-042&delay_days=14')
@@ -259,6 +294,34 @@ function App() {
       .then(setIdentity)
       .catch(() => setIdentity(null))
   }, [actorId])
+
+  useEffect(() => {
+    fetch('/api/mitigations?status=PENDING_APPROVAL', { headers: { 'X-Demo-Actor': actorId } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await apiError(response, 'Approval inbox unavailable'))
+        return response.json() as Promise<{ mitigations: Mitigation[] }>
+      })
+      .then((payload) => {
+        setPendingMitigations(payload.mitigations)
+        setMitigation((current) => {
+          const refreshedCurrent = payload.mitigations.find((item) => item.action_id === current?.action_id)
+          if (refreshedCurrent) return refreshedCurrent
+          if (current && current.status !== 'PENDING_APPROVAL') return current
+          return payload.mitigations[0] ?? null
+        })
+      })
+      .catch(() => undefined)
+  }, [actorId])
+
+  useEffect(() => {
+    fetch('/api/scenarios/compare?supplier_id=SUP-042&delay_days=3&delay_days=7&delay_days=14&delay_days=21')
+      .then((response) => {
+        if (!response.ok) throw new Error('Scenario comparison unavailable')
+        return response.json() as Promise<ScenarioComparison>
+      })
+      .then(setScenarioComparison)
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (!toast) return
@@ -325,7 +388,8 @@ function App() {
     setInvestigating(true)
     const started = Date.now()
     try {
-      const response = await fetch(`/api/demo?supplier_id=SUP-042&delay_days=${delayDays}`)
+      const supplierId = bundle.analysis.supplier.supplier_id
+      const response = await fetch(`/api/demo?supplier_id=${encodeURIComponent(supplierId)}&delay_days=${delayDays}`)
       if (!response.ok) throw new Error('Could not run workflow')
       const payload = await response.json() as DemoBundle
       const remaining = Math.max(0, 700 - (Date.now() - started))
@@ -347,7 +411,7 @@ function App() {
     setDrafting(true)
     const body = {
       disruption_context: {
-        supplier_id: 'SUP-042',
+        supplier_id: bundle.analysis.supplier.supplier_id,
         delay_days: delayDays,
         correlation_id: bundle.analysis.correlation_id,
       },
@@ -360,7 +424,12 @@ function App() {
         body: JSON.stringify(body),
       })
       if (!response.ok) throw new Error(await apiError(response, 'Draft rejected'))
-      setMitigation(await response.json() as Mitigation)
+      const created = await response.json() as Mitigation
+      setMitigation(created)
+      setPendingMitigations((current) => [
+        created,
+        ...current.filter((item) => item.action_id !== created.action_id),
+      ])
       setMode('api')
       setToast({ message: 'Governed draft created — switch to Aisha for an independent decision', tone: 'success' })
     } catch (error) {
@@ -383,8 +452,13 @@ function App() {
           idempotency_key: `approve-${mitigation.action_id}-v${mitigation.version}`,
         }),
       })
-      if (!response.ok) throw new Error(await apiError(response, 'Approval failed'))
-      setMitigation(await response.json() as Mitigation)
+      if (!response.ok) {
+        if (response.status === 409) await refreshApprovalInbox()
+        throw new Error(await apiError(response, 'Approval failed'))
+      }
+      const approved = await response.json() as Mitigation
+      setMitigation(approved)
+      setPendingMitigations((current) => current.filter((item) => item.action_id !== approved.action_id))
       setToast({ message: 'Human approval recorded after all policy checks passed', tone: 'success' })
     } catch (error) {
       setToast({ message: `${error instanceof Error ? error.message : 'Approval failed'} — pending state preserved`, tone: 'error' })
@@ -407,8 +481,13 @@ function App() {
           idempotency_key: `revise-${mitigation.action_id}-v${mitigation.version}`,
         }),
       })
-      if (!response.ok) throw new Error(await apiError(response, 'Return for revision failed'))
-      setMitigation(await response.json() as Mitigation)
+      if (!response.ok) {
+        if (response.status === 409) await refreshApprovalInbox()
+        throw new Error(await apiError(response, 'Return for revision failed'))
+      }
+      const returned = await response.json() as Mitigation
+      setMitigation(returned)
+      setPendingMitigations((current) => current.filter((item) => item.action_id !== returned.action_id))
       setMode('api')
       setToast({ message: 'Draft returned for revision — no external action executed', tone: 'success' })
     } catch (error) {
@@ -436,6 +515,7 @@ function App() {
         <nav>
           <span className="nav-label">Command center</span>
           <NavItem icon={LayoutDashboard} label="Overview" target="overview" active={activeSection === 'overview'} onClick={scrollTo} />
+          <NavItem icon={Activity} label="Scenario planner" target="scenarios" active={activeSection === 'scenarios'} onClick={scrollTo} />
           <NavItem icon={Sparkles} label="Ask the graph" target="conversation" active={activeSection === 'conversation'} onClick={scrollTo} />
           <NavItem icon={Search} label="Investigation" target="investigation" active={activeSection === 'investigation'} onClick={scrollTo} />
           <NavItem icon={FileCheck2} label="Evidence" target="evidence" active={activeSection === 'evidence'} onClick={scrollTo} />
@@ -453,14 +533,14 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="avatar">{actorProfiles[actorId].initials}</div>
-          <div><strong>{actorProfiles[actorId].name}</strong><span>{actorProfiles[actorId].title}</span></div>
+          <div className="avatar">{activeInitials}</div>
+          <div><strong>{activeName}</strong><span>{activeTitle}</span></div>
           <span className={`identity-status ${identity ? 'verified' : ''}`} title={identity?.identity_source}>{identity ? 'Verified' : 'Offline'}</span>
         </div>
-        <div className="identity-switcher" aria-label="Demo identity">
+        {isDemoIdentity && <div className="identity-switcher" aria-label="Demo identity">
           <button className={actorId === 'maya.iyer' ? 'active' : ''} onClick={() => switchActor('maya.iyer')}>Planner</button>
           <button className={actorId === 'aisha.rao' ? 'active' : ''} onClick={() => switchActor('aisha.rao')}>Approver</button>
-        </div>
+        </div>}
       </aside>
 
       {menuOpen && <button className="sidebar-scrim" onClick={() => setMenuOpen(false)} aria-label="Close menu" />}
@@ -505,7 +585,37 @@ function App() {
             <StatCard label="Revenue at risk" value={shortMoney(bundle.summary.revenue_at_risk)} detail={`Across ${bundle.analysis.open_orders.length} open orders`} icon={CircleDollarSign} tone="red" delay={100} />
             <StatCard label="Plants at stockout risk" value={bundle.summary.plants_at_risk} detail={bundle.analysis.affected_plants.map((plant) => plant.city).join(' · ') || 'No plant exposed'} icon={Factory} tone="amber" delay={160} />
             <StatCard label="Orders at risk" value={bundle.summary.orders_at_risk} detail={`${bundle.analysis.affected_customers.filter((customer) => customer.tier === 'Strategic').length} strategic customers`} icon={PackageCheck} tone="indigo" delay={220} />
-            <StatCard label="Pending approvals" value={mitigation ? (mitigation.status === 'PENDING_APPROVAL' ? 1 : 0) : bundle.summary.pending_approvals} detail={mitigation?.status === 'PENDING_APPROVAL' ? 'Action owner assigned' : 'No action waiting'} icon={UserCheck} tone="blue" delay={280} />
+            <StatCard label="Pending approvals" value={mode === 'api' ? pendingMitigations.length : bundle.summary.pending_approvals} detail={pendingMitigations.length > 0 ? `${pendingMitigations.length} governed action${pendingMitigations.length === 1 ? '' : 's'} waiting` : 'No action waiting'} icon={UserCheck} tone="blue" delay={280} />
+          </section>
+
+          <section id="scenarios" className="page-section scenario-section">
+            <SectionHeading
+              eyebrow="Decision threshold explorer"
+              title="See when disruption becomes material"
+              description="Compare the same governed supply and demand records across multiple delay assumptions before choosing a response."
+              action={<span className="policy-chip"><ShieldCheck size={14} />Quantity-aware metric</span>}
+            />
+            <div className="scenario-panel panel">
+              <div className="scenario-list">
+                {scenarioComparison.scenarios.map((scenario) => {
+                  const maxRisk = Math.max(...scenarioComparison.scenarios.map((item) => item.revenue_at_risk), 1)
+                  return (
+                    <button key={scenario.delay_days} className={`scenario-row ${delayDays === scenario.delay_days ? 'selected' : ''}`} onClick={() => setDelayDays(scenario.delay_days)}>
+                      <span className="scenario-delay"><Clock3 size={15} /><strong>{scenario.delay_days} days</strong></span>
+                      <span className="scenario-bar"><i style={{ width: `${Math.max(2, scenario.revenue_at_risk / maxRisk * 100)}%` }} /></span>
+                      <span className="scenario-value"><strong>{shortMoney(scenario.revenue_at_risk)}</strong><small>{scenario.orders_at_risk} orders · {scenario.plants_at_risk} plants</small></span>
+                      <RiskBadge level={scenario.severity} />
+                    </button>
+                  )
+                })}
+              </div>
+              <aside className="scenario-threshold">
+                <span><Activity size={18} />First material exposure</span>
+                <strong>{scenarioComparison.first_exposure_delay_days ? `${scenarioComparison.first_exposure_delay_days} days` : 'No exposure'}</strong>
+                <p>The threshold is derived from protected inventory, on-time inbound quantities, and cumulative customer demand.</p>
+                <button className="secondary-button" onClick={() => { scrollTo('investigation'); void runInvestigation() }}>Run selected scenario<ArrowRight size={15} /></button>
+              </aside>
+            </div>
           </section>
 
           <section id="conversation" className="page-section conversation-section">
@@ -648,7 +758,7 @@ function App() {
             <div className="evidence-layout">
               <div className="evidence-list panel">
                 <div className="filter-row">
-                  {['All evidence', 'Supplier notice', 'Shipment exception', 'Governed metric'].map((filter) => (
+                  {['All evidence', 'Supplier notice', 'Shipment scenario', 'Governed metric'].map((filter) => (
                     <button key={filter} className={filter === evidenceFilter ? 'active' : ''} onClick={() => setEvidenceFilter(filter)}>{filter}</button>
                   ))}
                 </div>
@@ -661,7 +771,7 @@ function App() {
                       <div className="evidence-body">
                         <div><span>{item.source_type}</span><code>{item.reference_id}</code></div>
                         <h3>{item.title}</h3><p>{item.detail}</p>
-                        <small><Database size={12} />{item.source_system}<i />Observed {prettyTime(item.observed_at)}</small>
+                        <small><Database size={12} />{item.source_system}<i />{item.evidence_status === 'SCENARIO_PROJECTION' ? 'Source updated' : 'Observed'} {prettyTime(item.observed_at)}</small>
                       </div>
                       <button aria-label={`Open ${item.reference_id}`} onClick={() => setSelectedEvidence(item)}><ArrowRight size={17} /></button>
                     </article>
@@ -707,16 +817,22 @@ function App() {
                 </div>
                 <div className="impact-benefit"><span><CircleDollarSign size={18} /></span><div><small>Capacity-weighted protected revenue</small><strong>{shortMoney(selectedAlternative.estimated_protected_revenue ?? Math.round(bundle.analysis.risk_summary.revenue_at_risk * selectedAlternative.coverage_percent / 100))}</strong></div></div>
                 <div className="safety-note"><LockKeyhole size={15} /><span>Creates a draft only. No supplier or purchase order will be changed.</span></div>
-                <button className="primary-button full" onClick={createDraft} disabled={drafting || actorId !== 'maya.iyer' || mode !== 'api'}>{drafting ? <><RefreshCw size={17} className="spin" />Creating governed draft…</> : <><FileCheck2 size={17} />Create mitigation draft</>}</button>
-                <div className="role-requirement"><UserCheck size={14} /><span>{actorId === 'maya.iyer' ? 'Planner role verified for drafting' : 'Switch to Maya · Planner to create a draft'}</span></div>
+                <button className="primary-button full" onClick={createDraft} disabled={drafting || !canDraft || mode !== 'api'}>{drafting ? <><RefreshCw size={17} className="spin" />Creating governed draft…</> : <><FileCheck2 size={17} />Create mitigation draft</>}</button>
+                <div className="role-requirement"><UserCheck size={14} /><span>{canDraft ? 'Planner role verified for drafting' : isDemoIdentity ? 'Switch to Maya · Planner to create a draft' : 'Your Snowflake identity has read-only access'}</span></div>
               </aside>
             </div>
           </section>
 
           <section id="approval" className="page-section approval-section">
-            <SectionHeading eyebrow="Approval & audit" title="Control stays with people" description="Recommendations remain inert until an authorized, independent human records a decision." action={<span className="policy-chip"><UserCheck size={14} />Acting as {actorProfiles[actorId].name}</span>} />
+            <SectionHeading eyebrow="Approval & audit" title="Control stays with people" description="Recommendations remain inert until an authorized, independent human records a decision." action={<span className="policy-chip"><UserCheck size={14} />Acting as {activeName}</span>} />
             <div className="approval-layout">
               <div className={`approval-gate panel ${mitigation ? 'has-draft' : ''} ${mitigation?.status === 'APPROVED' ? 'approved' : ''} ${mitigation?.status === 'RETURNED_FOR_REVISION' ? 'returned' : ''}`}>
+                {pendingMitigations.length > 0 && (
+                  <div className="approval-inbox" aria-label="Pending approval inbox">
+                    <span><UserCheck size={14} /><strong>Approval inbox</strong><em>{pendingMitigations.length}</em></span>
+                    <div>{pendingMitigations.map((item) => <button key={item.action_id} className={mitigation?.action_id === item.action_id ? 'active' : ''} onClick={() => setMitigation(item)}><strong>{item.action_id}</strong><small>{item.proposed_supplier_id} · {item.part_id} → {item.plant_id}</small></button>)}</div>
+                  </div>
+                )}
                 {!mitigation ? (
                   <div className="empty-approval"><span><UserCheck size={26} /></span><h3>No actions awaiting approval</h3><p>Select an approved alternative and create a mitigation draft to begin the controlled approval flow.</p><button className="secondary-button" onClick={() => scrollTo('mitigation')}>Open mitigation planner<ArrowRight size={15} /></button></div>
                 ) : (
@@ -730,7 +846,7 @@ function App() {
                       <div><span>Action</span><strong>Source from approved alternative</strong></div><div><span>Supplier</span><strong>{mitigation.proposed_supplier_id}</strong></div><div><span>Part / plant</span><strong>{mitigation.part_id} · {mitigation.plant_id}</strong></div><div><span>Owner</span><strong>{mitigation.owner}</strong></div><div><span>Action version</span><strong>v{mitigation.version}</strong></div><div><span>Policy decision</span><strong>{mitigation.policy_decision_id}</strong></div>
                     </div>
                     {mitigation.status === 'PENDING_APPROVAL' ? (
-                      <><div className="approval-role-gate"><LockKeyhole size={15} /><span>{actorId === 'aisha.rao' ? 'Approver role verified · owner separation confirmed server-side' : 'Switch to Aisha · Approver to record an independent decision'}</span></div><div className="approval-actions"><button className="reject-button" onClick={returnDraft} disabled={returning || actorId !== 'aisha.rao'}>{returning ? <><RefreshCw size={17} className="spin" />Returning…</> : <><XCircle size={17} />Return for revision</>}</button><button className="approve-button" onClick={approveDraft} disabled={approving || actorId !== 'aisha.rao'}>{approving ? <><RefreshCw size={17} className="spin" />Recording…</> : <><CheckCircle2 size={17} />Approve action</>}</button></div></>
+                      <><div className="approval-role-gate"><LockKeyhole size={15} /><span>{canApprove ? 'Approver role verified · owner separation enforced server-side' : isDemoIdentity ? 'Switch to Aisha · Approver to record an independent decision' : 'Your Snowflake identity is not an approver'}</span></div><div className="approval-actions"><button className="reject-button" onClick={returnDraft} disabled={returning || !canApprove}>{returning ? <><RefreshCw size={17} className="spin" />Returning…</> : <><XCircle size={17} />Return for revision</>}</button><button className="approve-button" onClick={approveDraft} disabled={approving || !canApprove}>{approving ? <><RefreshCw size={17} className="spin" />Recording…</> : <><CheckCircle2 size={17} />Approve action</>}</button></div></>
                     ) : mitigation.status === 'APPROVED' ? (
                       <div className="approved-banner"><CheckCircle2 size={18} /><div><strong>Approved by {mitigation.approved_by}</strong><span>Approval is recorded; execution remains a separate downstream step.</span></div></div>
                     ) : (
@@ -767,8 +883,8 @@ function App() {
             </div>
             <h2 id="evidence-detail-title">{selectedEvidence.title}</h2>
             <p>{selectedEvidence.detail}</p>
-            <dl><div><dt>Source system</dt><dd>{selectedEvidence.source_system}</dd></div><div><dt>Observed</dt><dd>{prettyTime(selectedEvidence.observed_at)}</dd></div><div><dt>Workflow</dt><dd>{bundle.analysis.correlation_id}</dd></div></dl>
-            <div className="evidence-verified"><ShieldCheck size={17} /><span>Verified source record linked to this governed investigation.</span></div>
+            <dl><div><dt>Source system</dt><dd>{selectedEvidence.source_system}</dd></div><div><dt>{selectedEvidence.evidence_status === 'SCENARIO_PROJECTION' ? 'Source updated' : 'Observed'}</dt><dd>{prettyTime(selectedEvidence.observed_at)}</dd></div><div><dt>Status</dt><dd>{selectedEvidence.evidence_status?.replaceAll('_', ' ') ?? 'RECORDED'}</dd></div></dl>
+            <div className="evidence-verified"><ShieldCheck size={17} /><span>{selectedEvidence.evidence_status === 'SCENARIO_PROJECTION' ? 'Projection derived from a recorded shipment and the selected delay assumption.' : 'Verified source record linked to this governed investigation.'}</span></div>
           </section>
         </div>
       )}

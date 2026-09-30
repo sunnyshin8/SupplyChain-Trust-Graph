@@ -10,13 +10,15 @@ Supplier disruptions are usually detected in one system, explained in another, a
 
 - **End-to-end impact tracing:** supplier → part → plant → inventory → shipment → sales order → customer.
 - **Consistent metrics:** revenue at risk, on-time delivery, and stockout risk come from governed definitions rather than generated prose.
+- **Decision-threshold simulation:** planners compare 3/7/14/21-day scenarios and see the first delay that creates material customer exposure.
 - **Evidence-backed answers:** results include source records, timestamps, correlation IDs, audit IDs, and Snowflake query IDs when available.
 - **Guarded conversational analytics:** natural-language questions route only to allowlisted deterministic tools or guarded Cortex Analyst queries.
 - **Safe recovery planning:** only approved supplier-part-plant qualifications can become mitigation options.
 - **Human-controlled actions:** planners create drafts; a separate authorized approver records the decision; ERP execution stays outside the trust boundary.
+- **Durable approval inbox:** pending drafts reload from `WORKFLOW`, duplicate active mitigations are rejected, and approval revalidates live qualification and capacity inside the decision transaction.
 - **Durable governance:** Snowflake separates private source data, read-only analytics, workflow state, and append-only audit evidence.
 - **Repeatable agent workflows:** Snowflake CoCo CLI discovers project skills for modeling, investigation, analysis, mitigation, and trust evaluation.
-- **Operations-ready UX:** a Next.js control tower presents impact, evidence, alternatives, approvals, and audit history in one responsive interface.
+- **Snowflake-hosted UX:** a Next.js control tower and FastAPI service are packaged as Linux/AMD64 containers for a single Snowpark Container Services deployment.
 
 ## Reference scenario
 
@@ -64,6 +66,7 @@ Analysis, recommendation, drafting, approval, and execution are deliberately sep
 ```mermaid
 flowchart TB
     UI[Next.js operations dashboard] --> API[FastAPI REST adapter]
+    SPCS[Snowpark Container Services ingress] --> UI
     COCO[Snowflake CoCo CLI] --> MCP[Supply Chain MCP server]
     COCO --> ANALYST[Cortex Analyst]
     API --> ENGINE[Deterministic workflow engine]
@@ -86,10 +89,12 @@ The frontend uses Next.js App Router, React, and TypeScript. It provides:
 - a natural-language question panel with grounded responses;
 - an interactive supplier-to-customer blast-radius graph;
 - order-level revenue impact and metric explanations;
+- multi-delay scenario comparison with a visible materiality threshold;
 - evidence inspection with source metadata;
+- explicit recorded, derived, and scenario-projection evidence labels;
 - approved-alternative comparison and trade-offs;
 - planner and approver views with separation of duties;
-- mitigation status, action versions, policy IDs, and audit history;
+- a durable pending-approval inbox, mitigation status, action versions, policy IDs, and audit history;
 - explicit preview, fixture, and live Snowflake provenance states.
 
 If the backend is unavailable, the UI may show a clearly labeled unverified preview so the interface remains inspectable. Investigations and every state-changing action fail closed; the browser never simulates a successful draft or approval.
@@ -98,15 +103,16 @@ If the backend is unavailable, the UI may show a clearly labeled unverified prev
 
 One Python service contains the REST API, MCP surface, policy checks, workflow engine, and repository abstraction. Keeping these responsibilities inside one deployable preserves a single policy and transaction boundary without unnecessary distributed coordination.
 
-The MCP server exposes six typed tools:
+The MCP server exposes seven typed tools:
 
 | Tool | Responsibility |
 | --- | --- |
 | `ask_supply_chain(question)` | Route a natural-language request to an allowlisted governed workflow. |
 | `analyze_supplier_delay(supplier_id, delay_days)` | Trace the complete disruption blast radius. |
+| `compare_disruption_scenarios(supplier_id, delay_days[])` | Compare one to eight governed delay assumptions. |
 | `get_inventory_risk(part_id, plant_id?)` | Return safety-stock-aware inventory exposure. |
-| `trace_order_impact(part_id, delay_days)` | Identify affected orders and calculate revenue at risk. |
-| `list_approved_alternatives(part_id, plant_id)` | Rank only qualified recovery suppliers. |
+| `trace_order_impact(part_id, delay_days, supplier_id?)` | Identify affected orders and calculate quantity-aware revenue at risk. |
+| `list_approved_alternatives(part_id, plant_id, disrupted_supplier_id?, delay_days?)` | Rank only qualified recovery suppliers. |
 | `draft_mitigation(disruption_context, selected_mitigation_option)` | Create an attributable `PENDING_APPROVAL` action. |
 
 There is intentionally no MCP tool for executing a purchase order, changing a supplier assignment, or deleting audit history.
@@ -129,14 +135,13 @@ The runtime disables inherited secondary roles on every application connection. 
 
 ### Revenue at risk
 
-An open order contributes to revenue at risk only when both conditions are true:
-
-1. projected inbound supply arrives after the customer-required date; and
-2. allocatable inventory cannot cover cumulative demand at that plant.
+An open order contributes to revenue at risk when protected on-hand inventory plus all inbound quantities arriving by its required date cannot cover cumulative demand at that plant. Only shipments from the disrupted supplier receive the selected scenario delay; other confirmed inbound supply retains its recorded promise date.
 
 ```text
 allocatable inventory = max(on hand - safety stock, 0)
-revenue at risk = sum(order value for orders that pass the at-risk test)
+available supply by required date = allocatable inventory + on-time inbound quantity
+at risk = available supply by required date < cumulative order demand
+revenue at risk = sum(order value for at-risk orders)
 ```
 
 Orders are evaluated by required date so earlier demand consumes allocatable inventory first. The metric exists in deterministic Python and governed Snowflake SQL, then passes a multi-delay parity check.
@@ -160,16 +165,16 @@ Metric definitions are never delegated to a language model. Natural language may
 - Missing governed records produce `INSUFFICIENT_EVIDENCE`.
 - Policy-bypass and execution prompts produce `REJECTED_BY_POLICY`.
 - Only an approved supplier-part-plant combination can be recommended or drafted.
-- The server derives the actor from an allowlisted identity seam, not a request-body owner.
+- The server derives the actor from trusted Snowflake ingress identity in hosted mode or a strict allowlist in local mode, never from a request-body owner.
 - Planner and approver roles remain separate; the draft owner cannot self-approve.
-- Approval revalidates action version, supplier qualification, and capacity.
+- Approval revalidates action version, supplier qualification, and capacity from Snowflake inside the write transaction.
 - Idempotency keys prevent duplicate recorded decisions.
 - Optimistic versions reject stale concurrent decisions.
 - Action and audit writes share one explicit Snowflake transaction.
 - Audit evidence is append-only to the application runtime.
 - Approval records a decision but never executes it in an external system.
 
-The local `X-Demo-Actor` header is an explicit development identity seam. Replace it with verified SSO or JWT claims in production while retaining the same authorization, separation-of-duties, version, idempotency, and audit checks.
+The local `X-Demo-Actor` header is accepted only in `SUPPLYCHAIN_IDENTITY_MODE=demo`. Snowflake hosting uses `SUPPLYCHAIN_IDENTITY_MODE=spcs`, ignores that header, and trusts the authenticated `Sf-Context-Current-User` value injected by Snowflake ingress. Planner and approver membership come from deployment-time allowlists, while owner separation is always enforced server-side.
 
 ## Snowflake CoCo CLI integration
 
@@ -288,14 +293,21 @@ snowflake/004_validation.sql
 snowflake/005_security_zones.sql
 snowflake/006_core_isolation_fix.sql
 snowflake/007_cortex_agent.sql
+snowflake/008_quantity_aware_scenarios.sql
 ```
 
-They create the database, load deterministic reference data, define relational and semantic metrics, validate expected results, cut over to layered security zones, remove residual legacy grants, and define the secure Cortex Agent.
+They create the database, load deterministic reference data, define relational and semantic metrics, validate expected results, cut over to layered security zones, remove residual legacy grants, define the secure Cortex Agent, and upgrade the metric to quantity-aware scenario allocation.
 
 Deploy only with authority to create persistent Snowflake objects and grants:
 
 ```bash
 make snowflake-deploy
+```
+
+For an already deployed account, apply only the forward migration without replaying the seed loader:
+
+```bash
+make snowflake-upgrade
 ```
 
 Run least-privilege validation:
@@ -313,6 +325,44 @@ make backend-snowflake
 ```
 
 `/health` reports repository mode, source system, connection name, snapshot metadata, and recent query IDs without exposing credentials.
+
+## Snowflake-only hosting
+
+The application deploys to Snowpark Container Services as two containers in one service instance:
+
+- the public Next.js endpoint on port `3000`;
+- an internal FastAPI container on port `8000`;
+- same-origin `/api/*` proxying over the instance-local network;
+- Snowflake-authenticated ingress identity for application authorization;
+- a mounted, rotating service OAuth token for password-free database access;
+- one `CPU_X64_XS` node, one service instance, and Linux/AMD64 images stored in Snowflake's image repository.
+
+Install the official Snowflake CLI and start a Podman machine, then deploy:
+
+```bash
+make snowflake-host \
+  PLANNER_USERS=SHINGLOO \
+  APPROVER_USERS=SECOND_REVIEWER \
+  PODMAN_MACHINE=zentro-podman
+```
+
+The deployer creates `APP.SUPPLYCHAIN_IMAGES` and `SUPPLYCHAIN_APP_POOL`, builds immutable API/web tags, updates the service specification, waits for both readiness probes, and returns the Snowflake ingress URL. `SUPPLYCHAIN_PLANNER_USERS` and `SUPPLYCHAIN_APPROVER_USERS` are server-side user mappings and must be non-empty, non-overlapping Snowflake usernames. Human users receive only `SUPPLYCHAIN_APP_READONLY` plus the endpoint's `UI_USAGE` service role—never `SUPPLYCHAIN_APP_RUNTIME`. The service owner inherits the non-human runtime data role; its temporary `CREATE SERVICE` and `BIND SERVICE ENDPOINT` grants are revoked after deployment.
+
+The web build is a Next.js static export served by an unprivileged AMD64 Nginx container. `/api/*` stays same-origin and is proxied to the colocated FastAPI container, including Snowflake's authenticated ingress identity header. This avoids shipping build-machine-native Node artifacts into the Snowflake runtime. The API readiness probe executes `SELECT 1`; if the session has closed, it re-reads the mounted Snowflake token and reconnects once before failing unhealthy.
+
+Snowflake currently rejects service-level auto-suspend for a service with a public endpoint. The foundation uses the smallest available compute family and one node, but the public service consumes compute while running. Suspend it when the link is not needed:
+
+```sql
+ALTER SERVICE SUPPLYCHAIN_TRUST_GRAPH.APP.SUPPLYCHAIN_TRUST_GRAPH_SERVICE SUSPEND;
+ALTER COMPUTE POOL SUPPLYCHAIN_APP_POOL SUSPEND;
+```
+
+Resume before a demonstration:
+
+```sql
+ALTER COMPUTE POOL SUPPLYCHAIN_APP_POOL RESUME;
+ALTER SERVICE SUPPLYCHAIN_TRUST_GRAPH.APP.SUPPLYCHAIN_TRUST_GRAPH_SERVICE RESUME;
+```
 
 ### Durable workflow verification
 
@@ -341,6 +391,7 @@ The full evaluation covers the golden metric, exact affected orders, and plant-l
 | `GET` | `/api/session` | Resolve the current allowlisted identity and roles. |
 | `GET` | `/api/demo` | Return the complete dashboard bundle. |
 | `GET` | `/api/dashboard` | Return executive summary metrics. |
+| `GET` | `/api/scenarios/compare` | Compare governed impact across delay assumptions. |
 | `GET` | `/api/governed-metrics` | Return governed metric definitions and values. |
 | `POST` | `/api/conversation` | Route a natural-language supply-chain question. |
 | `POST` | `/api/workflows/supplier-delay` | Run a deterministic disruption investigation. |
@@ -348,6 +399,7 @@ The full evaluation covers the golden metric, exact affected orders, and plant-l
 | `GET` | `/api/order-impact` | Trace affected orders and revenue. |
 | `GET` | `/api/approved-alternatives` | List qualified mitigation suppliers. |
 | `POST` | `/api/mitigations/draft` | Create a planner-owned draft. |
+| `GET` | `/api/mitigations` | Load the role-protected durable approval inbox. |
 | `POST` | `/api/mitigations/{action_id}/approve` | Record an independent approval. |
 | `POST` | `/api/mitigations/{action_id}/return-for-revision` | Return a versioned draft. |
 | `GET` | `/api/audit-events` | Read attributable append-only evidence. |
@@ -384,7 +436,7 @@ make build
 make scorecard
 ```
 
-Coverage includes exact metrics, safety stock, zero-risk behavior, metric parity, evidence failures, provenance, intent allowlisting, policy bypasses, MCP contracts, server-derived ownership, role authorization, separation of duties, qualification controls, action versions, idempotency, approval-time revalidation, Snowflake transactions, append-only audit rules, layered grants, guarded generated SQL, semantic-view contracts, and the Cortex Agent definition.
+Coverage includes exact quantity-aware metrics, safety stock, zero-risk behavior, scenario thresholds, lead-time-aware alternatives, metric parity, evidence classification, provenance, intent allowlisting, policy bypasses, MCP contracts, Snowflake ingress identity, server-derived ownership, multi-action approval inboxes, duplicate-draft conflicts, role authorization, separation of duties, actor-bound idempotency, approval-time revalidation, Snowflake transactions, append-only audit rules, layered grants, guarded generated SQL, semantic-view contracts, live dependency health/reconnect, hosting-role isolation, and portable Snowflake images. The current suite contains 52 backend tests plus frontend lint, standalone production build, and static-export build gates.
 
 ## Repository layout
 
@@ -403,6 +455,7 @@ Coverage includes exact metrics, safety stock, zero-risk behavior, metric parity
 ├── frontend/
 │   ├── app/                        # Next.js App Router entry points
 │   └── src/                        # Dashboard, types, and preview data
+├── deploy/spcs/                    # Snowflake container images and service spec
 ├── scripts/                        # Deployment and verification harnesses
 ├── snowflake/                      # SQL migrations and ontology contract
 ├── ARCHITECTURE.md                 # Boundaries and runtime design
@@ -430,7 +483,7 @@ The system prefers a visible refusal over an ungrounded success:
 
 The governed decision path is implemented; production adoption should additionally:
 
-- replace the demo identity seam with enterprise SSO/JWT verification;
+- move hosted role membership from deployment-time allowlists to an organization-managed identity/entitlement source;
 - replace deterministic seed loading with controlled CDC or batch ingestion;
 - connect approved decisions to a separately authorized ERP execution service;
 - integrate operational alerts with organization-owned channels;

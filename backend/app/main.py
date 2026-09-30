@@ -14,8 +14,13 @@ from .models import (
     RevisionRequest,
     SupplierDelayRequest,
 )
-from .policy import require_role, resolve_identity
-from .service import EvidenceError, service
+from .policy import require_any_role, require_role, resolve_identity
+from .service import (
+    EvidenceError,
+    GovernanceAuthorizationError,
+    GovernanceConflictError,
+    service,
+)
 
 
 @asynccontextmanager
@@ -60,11 +65,25 @@ async def validation_handler(_: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": "governance_validation_failed", "detail": str(exc)})
 
 
+@app.exception_handler(GovernanceConflictError)
+async def conflict_handler(_: Request, exc: GovernanceConflictError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"error": "workflow_conflict", "detail": str(exc)})
+
+
+@app.exception_handler(GovernanceAuthorizationError)
+async def governance_authorization_handler(
+    _: Request,
+    exc: GovernanceAuthorizationError,
+) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"error": "governance_forbidden", "detail": str(exc)})
+
+
 @app.get("/health", tags=["system"])
 def health() -> dict:
     return {
         "status": "ok",
         "service": "Supply Chain Management MCP Server",
+        "dependency": service.repo.health_check(),
         **service.repo.status(),
     }
 
@@ -83,8 +102,19 @@ def demo_bundle(
 
 
 @app.get("/api/dashboard", tags=["analytics"])
-def dashboard() -> dict:
-    return service.demo_bundle("SUP-042", 14)["summary"]
+def dashboard(
+    supplier_id: str = Query(default="SUP-042"),
+    delay_days: int = Query(default=14, ge=1, le=90),
+) -> dict:
+    return service.demo_bundle(supplier_id, delay_days)["summary"]
+
+
+@app.get("/api/scenarios/compare", tags=["analytics"])
+def compare_delay_scenarios(
+    supplier_id: str = Query(default="SUP-042"),
+    delay_days: list[int] = Query(default=[3, 7, 14, 21]),
+) -> dict:
+    return service.compare_delay_scenarios(supplier_id, delay_days)
 
 
 @app.get("/api/governed-metrics", tags=["analytics"])
@@ -93,13 +123,22 @@ def governed_metrics() -> dict:
 
 
 @app.post("/api/workflows/supplier-delay", tags=["workflows"])
-def analyze_supplier_delay(payload: SupplierDelayRequest) -> dict:
-    return service.analyze_supplier_delay(payload.supplier_id, payload.delay_days)
+def analyze_supplier_delay(payload: SupplierDelayRequest, request: Request) -> dict:
+    identity = resolve_identity(request)
+    return service.analyze_supplier_delay(
+        payload.supplier_id,
+        payload.delay_days,
+        actor=f"{identity.display_name} · {identity.title}",
+    )
 
 
 @app.post("/api/conversation", tags=["conversational analytics"])
-def ask_supply_chain(payload: ConversationRequest) -> dict:
-    return service.ask_supply_chain(payload.question)
+def ask_supply_chain(payload: ConversationRequest, request: Request) -> dict:
+    identity = resolve_identity(request)
+    return service.ask_supply_chain(
+        payload.question,
+        actor=f"{identity.display_name} · {identity.title}",
+    )
 
 
 @app.get("/api/inventory-risk", tags=["analytics"])
@@ -108,13 +147,27 @@ def get_inventory_risk(part_id: str, plant_id: str | None = None) -> dict:
 
 
 @app.get("/api/order-impact", tags=["analytics"])
-def trace_order_impact(part_id: str, delay_days: int = Query(ge=1, le=90)) -> dict:
-    return service.trace_order_impact(part_id, delay_days)
+def trace_order_impact(
+    part_id: str,
+    delay_days: int = Query(ge=1, le=90),
+    supplier_id: str | None = None,
+) -> dict:
+    return service.trace_order_impact(part_id, delay_days, supplier_id)
 
 
 @app.get("/api/approved-alternatives", tags=["mitigation"])
-def list_approved_alternatives(part_id: str, plant_id: str) -> dict:
-    return service.list_approved_alternatives(part_id, plant_id)
+def list_approved_alternatives(
+    part_id: str,
+    plant_id: str,
+    disrupted_supplier_id: str | None = None,
+    delay_days: int = Query(default=14, ge=1, le=90),
+) -> dict:
+    return service.list_approved_alternatives(
+        part_id,
+        plant_id,
+        delay_days,
+        disrupted_supplier_id,
+    )
 
 
 @app.post("/api/mitigations/draft", tags=["mitigation"])
@@ -127,6 +180,13 @@ def draft_mitigation(payload: DraftMitigationRequest, request: Request) -> dict:
         f"{identity.display_name} · {identity.title}",
         identity.actor_id,
     ).model_dump()
+
+
+@app.get("/api/mitigations", tags=["approvals"])
+def list_mitigations(request: Request, status: str | None = None) -> dict:
+    identity = resolve_identity(request)
+    require_any_role(identity, "SUPPLY_PLANNER", "MITIGATION_APPROVER")
+    return service.list_mitigations(status)
 
 
 @app.post("/api/mitigations/{action_id}/approve", tags=["approvals"])
@@ -158,7 +218,9 @@ def return_mitigation_for_revision(action_id: str, payload: RevisionRequest, req
 
 
 @app.get("/api/audit-events", tags=["approvals"])
-def audit_events() -> dict:
+def audit_events(request: Request) -> dict:
+    identity = resolve_identity(request)
+    require_any_role(identity, "SUPPLY_PLANNER", "MITIGATION_APPROVER")
     return {
         "audit_events": service.repo.audit_events,
         "append_only": True,

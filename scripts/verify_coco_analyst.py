@@ -24,6 +24,10 @@ FORBIDDEN_SQL = re.compile(
     r"merge|truncate)\b",
     re.IGNORECASE,
 )
+FORBIDDEN_QUERY_SHAPES = re.compile(
+    r"\b(union|intersect|except|lateral|flatten|information_schema|system\$)\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_cli_json(output: str) -> dict[str, Any]:
@@ -52,19 +56,11 @@ def _extract_generated_sql(
         raise ValueError("CoCo Analyst generated more than one SQL statement.")
     if FORBIDDEN_SQL.search(uncommented):
         raise ValueError("CoCo Analyst generated non-read-only SQL.")
+    if FORBIDDEN_QUERY_SHAPES.search(uncommented):
+        raise ValueError("CoCo Analyst generated a query shape outside the allowlist.")
 
     normalized = " ".join(uncommented.lower().split())
     expected = expected_view.lower()
-    if not allowed_relations:
-        if not normalized.startswith("select * from semantic_view("):
-            raise ValueError("CoCo Analyst SQL is outside the semantic-view allowlist.")
-        if expected not in normalized:
-            raise ValueError("CoCo Analyst SQL references an unexpected semantic view.")
-        return sql
-
-    if not (normalized.startswith("select ") or normalized.startswith("with ")):
-        raise ValueError("CoCo Analyst SQL is not a read-only query.")
-
     permitted = {expected, *(relation.lower() for relation in allowed_relations)}
     qualified_objects = {
         value.lower()
@@ -76,6 +72,14 @@ def _extract_generated_sql(
     }
     if not qualified_objects or not qualified_objects.issubset(permitted):
         raise ValueError("CoCo Analyst SQL references a relation outside the allowlist.")
+
+    if not allowed_relations:
+        if not normalized.startswith("select * from semantic_view("):
+            raise ValueError("CoCo Analyst SQL is outside the semantic-view allowlist.")
+        if expected not in normalized:
+            raise ValueError("CoCo Analyst SQL references an unexpected semantic view.")
+    elif not (normalized.startswith("select ") or normalized.startswith("with ")):
+        raise ValueError("CoCo Analyst SQL is not a read-only query.")
 
     cte_names = {
         value.lower()
@@ -159,6 +163,7 @@ def main() -> None:
     try:
         cursor = connection.cursor(snowflake.connector.DictCursor)
         cursor.execute("USE SECONDARY ROLES NONE")
+        cursor.execute("USE ROLE SUPPLYCHAIN_APP_READONLY")
         cursor.execute(generated_sql)
         result_query_id = cursor.sfqid
         rows = [
@@ -177,6 +182,7 @@ def main() -> None:
             raise ValueError(f"Cortex Analyst parity failed: {rows!r}")
 
         if args.record_audit:
+            cursor.execute("USE ROLE SUPPLYCHAIN_APP_RUNTIME")
             suffix = uuid4().hex[:8].upper()
             audit_id = f"AUD-COCO-{suffix}"
             correlation_id = f"COCO-{suffix}"

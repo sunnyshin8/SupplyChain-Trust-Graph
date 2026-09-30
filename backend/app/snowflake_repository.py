@@ -100,7 +100,7 @@ class SnowflakeRepository(FixtureRepository):
     no password, token, or account secret is read from this repository.
     """
 
-    def __init__(self, connection_name: str) -> None:
+    def __init__(self, connection_name: str | None) -> None:
         super().__init__()
         self.mode = "snowflake"
         self.source_system = "SNOWFLAKE_GOVERNED"
@@ -120,13 +120,49 @@ class SnowflakeRepository(FixtureRepository):
             raise RuntimeError(
                 "Snowflake mode requires snowflake-connector-python. Run make install."
             ) from exc
-        connection = snowflake.connector.connect(connection_name=self.connection_name)
+        token_path = os.getenv("SNOWFLAKE_TOKEN_PATH", "/snowflake/session/token")
+        if os.path.isfile(token_path):
+            with open(token_path, encoding="utf-8") as token_file:
+                token = token_file.read().strip()
+            host = os.getenv("SNOWFLAKE_HOST", "").strip()
+            account = os.getenv("SNOWFLAKE_ACCOUNT", "").strip()
+            if not host or not account or not token:
+                raise RuntimeError(
+                    "SPCS Snowflake mode requires SNOWFLAKE_HOST, SNOWFLAKE_ACCOUNT, and a mounted session token."
+                )
+            connection = snowflake.connector.connect(
+                host=host,
+                account=account,
+                authenticator="oauth",
+                token=token,
+                warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+                database="SUPPLYCHAIN_TRUST_GRAPH",
+            )
+            self.connection_name = "SPCS_SERVICE_IDENTITY"
+        else:
+            if not self.connection_name:
+                raise RuntimeError("SNOWFLAKE_CONNECTION_NAME is required outside SPCS.")
+            connection = snowflake.connector.connect(connection_name=self.connection_name)
         connection.autocommit(False)
         # Do not let a developer's secondary roles (for example ACCOUNTADMIN)
         # silently widen the application's least-privilege runtime boundary.
         with connection.cursor() as cursor:
             cursor.execute("USE SECONDARY ROLES NONE")
         return connection
+
+    def _reconnect(self) -> None:
+        connection = getattr(self, "_connection", None)
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        # _connect re-reads the mounted SPCS token on every attempt.
+        self._connection = self._connect()
+
+    def _ensure_connection(self) -> None:
+        if self._connection.is_closed():
+            self._reconnect()
 
     def _remember(self, cursor: Any) -> None:
         query_id = getattr(cursor, "sfqid", None)
@@ -138,6 +174,7 @@ class SnowflakeRepository(FixtureRepository):
         from snowflake.connector import DictCursor
 
         with self.lock:
+            self._ensure_connection()
             with self._connection.cursor(DictCursor) as cursor:
                 cursor.execute(sql, params)
                 self._remember(cursor)
@@ -235,6 +272,10 @@ class SnowflakeRepository(FixtureRepository):
             if time.monotonic() >= self._next_refresh_at:
                 self._load()
 
+    def refresh_workflow_state(self) -> None:
+        # Decisions and approval queues must never rely on the snapshot TTL.
+        self._load()
+
     def all(self, entity: str) -> list[dict[str, Any]]:
         self._refresh_if_stale()
         return super().all(entity)
@@ -250,6 +291,30 @@ class SnowflakeRepository(FixtureRepository):
         status["snapshot_ttl_seconds"] = self._snapshot_ttl_seconds
         status["semantic_validation"] = self.semantic_validation
         return status
+
+    def health_check(self) -> dict[str, Any]:
+        """Prove the live session is usable, reconnecting once with a fresh SPCS token."""
+
+        with self.lock:
+            for attempt in range(2):
+                try:
+                    self._ensure_connection()
+                    with self._connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                        cursor.fetchone()
+                        self._remember(cursor)
+                        query_id = cursor.sfqid
+                    self._connection.commit()
+                    return {"database": "snowflake", "connected": True, "query_id": query_id}
+                except Exception:
+                    try:
+                        self._connection.rollback()
+                    except Exception:
+                        pass
+                    if attempt == 1:
+                        raise
+                    self._reconnect()
+        raise RuntimeError("Snowflake health check failed")
 
     def _insert_audit(self, cursor: Any, event: dict[str, Any]) -> None:
         cursor.execute(
@@ -338,6 +403,29 @@ class SnowflakeRepository(FixtureRepository):
         with self.lock:
             try:
                 with self._connection.cursor() as cursor:
+                    if action["status"] == "APPROVED":
+                        cursor.execute(
+                            """
+                            SELECT APPROVED, AVAILABLE_CAPACITY
+                            FROM SUPPLYCHAIN_TRUST_GRAPH.GOVERNED.SUPPLIER_PARTS
+                            WHERE SUPPLIER_ID = %s AND PART_ID = %s AND PLANT_ID = %s
+                            """,
+                            (
+                                action["proposed_supplier_id"],
+                                action["part_id"],
+                                action["plant_id"],
+                            ),
+                        )
+                        self._remember(cursor)
+                        qualification = cursor.fetchone()
+                        if (
+                            not qualification
+                            or qualification[0] is not True
+                            or qualification[1] <= 0
+                        ):
+                            raise ValueError(
+                                "Approval blocked by the live Snowflake qualification or capacity check."
+                            )
                     cursor.execute(
                         """
                         UPDATE SUPPLYCHAIN_TRUST_GRAPH.WORKFLOW.MITIGATION_ACTIONS

@@ -2,7 +2,7 @@ import pytest
 
 from app.data import FixtureRepository
 from app.models import DisruptionContext, MitigationOption
-from app.service import SupplyChainService
+from app.service import EvidenceError, SupplyChainService
 
 
 def make_service() -> SupplyChainService:
@@ -16,6 +16,11 @@ def test_unapproved_supplier_cannot_be_recommended_or_drafted() -> None:
     assert all(item["approved"] for item in alternatives["approved_alternatives"])
     assert "SUP-031" not in {item["supplier_id"] for item in alternatives["approved_alternatives"]}
     assert alternatives["excluded_unapproved_count"] == 1
+    best = alternatives["approved_alternatives"][0]
+    assert best["coverage_percent"] == 100
+    assert best["projected_arrival_date"] == "2026-10-04"
+    assert best["protected_quantity"] == 470
+    assert best["estimated_protected_revenue"] == 390_000
 
     with pytest.raises(ValueError, match="not approved"):
         service.draft_mitigation(
@@ -83,3 +88,18 @@ def test_dashboard_hydration_is_read_only_and_does_not_append_audit_events() -> 
     service.demo_bundle("SUP-042", 14)
 
     assert service.repo.audit_events == initial_events
+
+
+def test_alternative_that_arrives_after_exposed_orders_is_excluded() -> None:
+    repo = FixtureRepository()
+    for row in repo._data["supplier_parts"]:
+        if row["part_id"] == "PRT-AX14" and row["supplier_id"] != "SUP-042":
+            row["lead_time_days"] = 30
+
+    with pytest.raises(EvidenceError, match="none can arrive"):
+        SupplyChainService(repo).list_approved_alternatives(
+            "PRT-AX14",
+            "PLT-PUN",
+            delay_days=14,
+            disrupted_supplier_id="SUP-042",
+        )

@@ -96,11 +96,13 @@ SELECT
   ALLOCATABLE_INVENTORY,
   CUMULATIVE_ORDER_DEMAND,
   INBOUND_QUANTITY,
-  PROJECTED_ETA > REQUIRED_DATE
-    AND ALLOCATABLE_INVENTORY < CUMULATIVE_ORDER_DEMAND AS IS_AT_RISK,
+  ALLOCATABLE_INVENTORY
+    + IFF(PROJECTED_ETA <= REQUIRED_DATE, INBOUND_QUANTITY, 0)
+    < CUMULATIVE_ORDER_DEMAND AS IS_AT_RISK,
   IFF(
-    PROJECTED_ETA > REQUIRED_DATE
-      AND ALLOCATABLE_INVENTORY < CUMULATIVE_ORDER_DEMAND,
+    ALLOCATABLE_INVENTORY
+      + IFF(PROJECTED_ETA <= REQUIRED_DATE, INBOUND_QUANTITY, 0)
+      < CUMULATIVE_ORDER_DEMAND,
     ORDER_VALUE,
     0
   ) AS AT_RISK_VALUE,
@@ -192,7 +194,7 @@ CREATE OR REPLACE SEMANTIC VIEW SUPPLY_CHAIN_TRUST_GRAPH_SEMANTIC
   METRICS (
     order_risk.revenue_at_risk AS SUM(order_risk.AT_RISK_VALUE)
       WITH SYNONYMS = ('exposed revenue', 'revenue exposure')
-      COMMENT = 'Sum of affected open-order value where supply cannot arrive before required date',
+      COMMENT = 'Sum of open-order value where protected stock plus inbound arriving by the required date cannot satisfy cumulative demand',
     order_risk.orders_at_risk AS COUNT_IF(order_risk.IS_AT_RISK)
       COMMENT = 'Count of open orders passing the governed at-risk test'
   )
@@ -203,7 +205,7 @@ CREATE OR REPLACE SEMANTIC VIEW SUPPLY_CHAIN_TRUST_GRAPH_SEMANTIC
       QUESTION 'What revenue is at risk from the SUP-042 delay?'
       VERIFIED_AT 1790658000
       ONBOARDING_QUESTION TRUE
-      VERIFIED_BY '(purpose = hackathon_demo)'
+      VERIFIED_BY '(purpose = governed_product_validation)'
       SQL 'SELECT * FROM SEMANTIC_VIEW(SUPPLY_CHAIN_TRUST_GRAPH_SEMANTIC METRICS order_risk.revenue_at_risk DIMENSIONS order_risk.supplier_id WHERE order_risk.supplier_id = ''SUP-042'')'
     )
   );

@@ -5,6 +5,26 @@ export type Evidence = {
   detail: string
   source_system: string
   observed_at: string
+  evidence_status?: 'RECORDED' | 'SCENARIO_PROJECTION' | 'DERIVED'
+}
+
+export type ScenarioResult = {
+  delay_days: number
+  severity: string
+  revenue_at_risk: number
+  orders_at_risk: number
+  plants_at_risk: number
+  strategic_customers_at_risk: number
+  source_references: string[]
+}
+
+export type ScenarioComparison = {
+  supplier_id: string
+  scenarios: ScenarioResult[]
+  first_exposure_delay_days: number | null
+  metric_definition: string
+  source_system: string
+  generated_at: string
 }
 
 export type Order = {
@@ -34,6 +54,9 @@ export type Alternative = {
   recommendation_rank: number
   coverage_percent: number
   estimated_protected_revenue: number
+  projected_arrival_date?: string
+  shortage_quantity?: number
+  protected_quantity?: number
   tradeoff: string
 }
 

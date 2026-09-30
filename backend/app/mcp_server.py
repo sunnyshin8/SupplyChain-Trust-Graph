@@ -7,7 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .models import DisruptionContext, MitigationOption
 from .policy import IDENTITIES
-from .service import EvidenceError, service
+from .service import EvidenceError, GovernanceAuthorizationError, service
 
 
 mcp = FastMCP(
@@ -28,6 +28,8 @@ def _safe(callable_: Any, *args: Any) -> dict[str, Any]:
             "detail": str(exc),
             "source_system": service.repo.source_system,
         }
+    except GovernanceAuthorizationError as exc:
+        return {"status": "REJECTED_BY_POLICY", "detail": str(exc)}
     except ValueError as exc:
         return {"status": "REJECTED_BY_POLICY", "detail": str(exc)}
 
@@ -36,6 +38,15 @@ def _safe(callable_: Any, *args: Any) -> dict[str, Any]:
 def analyze_supplier_delay(supplier_id: str, delay_days: int) -> dict[str, Any]:
     """Trace a supplier delay through parts, plants, inventory, shipments, orders, and customers."""
     return _safe(service.analyze_supplier_delay, supplier_id, delay_days)
+
+
+@mcp.tool()
+def compare_disruption_scenarios(
+    supplier_id: str,
+    delay_days: list[int],
+) -> dict[str, Any]:
+    """Compare governed impact across one to eight supplier-delay scenarios."""
+    return _safe(service.compare_delay_scenarios, supplier_id, delay_days)
 
 
 @mcp.tool()
@@ -51,15 +62,30 @@ def get_inventory_risk(part_id: str, plant_id: str | None = None) -> dict[str, A
 
 
 @mcp.tool()
-def trace_order_impact(part_id: str, delay_days: int) -> dict[str, Any]:
+def trace_order_impact(
+    part_id: str,
+    delay_days: int,
+    supplier_id: str | None = None,
+) -> dict[str, Any]:
     """Identify affected open sales orders and calculate governed revenue at risk."""
-    return _safe(service.trace_order_impact, part_id, delay_days)
+    return _safe(service.trace_order_impact, part_id, delay_days, supplier_id)
 
 
 @mcp.tool()
-def list_approved_alternatives(part_id: str, plant_id: str) -> dict[str, Any]:
+def list_approved_alternatives(
+    part_id: str,
+    plant_id: str,
+    disrupted_supplier_id: str | None = None,
+    delay_days: int = 14,
+) -> dict[str, Any]:
     """List only qualified supplier-part-plant alternatives, ranked with explicit trade-offs."""
-    return _safe(service.list_approved_alternatives, part_id, plant_id)
+    return _safe(
+        service.list_approved_alternatives,
+        part_id,
+        plant_id,
+        delay_days,
+        disrupted_supplier_id,
+    )
 
 
 @mcp.tool()

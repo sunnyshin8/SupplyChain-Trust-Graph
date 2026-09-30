@@ -36,6 +36,12 @@ SELECT * FROM SEMANTIC_VIEW({DEFAULT_VIEW} METRICS order_risk.revenue_at_risk)
         "DELETE FROM SUPPLYCHAIN_TRUST_GRAPH.AUDIT.AUDIT_EVENTS",
         "SELECT * FROM OTHER_DB.PUBLIC.OTHER_VIEW",
         f"SELECT * FROM SEMANTIC_VIEW({DEFAULT_VIEW}); SELECT CURRENT_USER()",
+        (
+            f"SELECT * FROM SEMANTIC_VIEW({DEFAULT_VIEW} "
+            "METRICS order_risk.revenue_at_risk) "
+            "UNION ALL SELECT * FROM SUPPLYCHAIN_TRUST_GRAPH.AUDIT.AUDIT_EVENTS"
+        ),
+        f"SELECT * FROM SEMANTIC_VIEW({DEFAULT_VIEW}) JOIN TABLE(FLATTEN(INPUT => []))",
     ],
 )
 def test_coco_analyst_harness_rejects_unsafe_or_unexpected_sql(sql: str) -> None:

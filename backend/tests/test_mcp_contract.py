@@ -6,6 +6,7 @@ from app.mcp_server import mcp
 EXPECTED_TOOLS = {
     "ask_supply_chain",
     "analyze_supplier_delay",
+    "compare_disruption_scenarios",
     "get_inventory_risk",
     "trace_order_impact",
     "list_approved_alternatives",

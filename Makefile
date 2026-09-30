@@ -1,4 +1,6 @@
-.PHONY: install backend backend-snowflake frontend test build scorecard verify-submission snowflake-deploy snowflake-validate snowflake-scorecard snowflake-parity live-api-verify coco-analyst-verify coco-analyst-eval
+.PHONY: install backend backend-snowflake frontend test build scorecard verify-submission snowflake-deploy snowflake-upgrade snowflake-host snowflake-validate snowflake-scorecard snowflake-parity live-api-verify coco-analyst-verify coco-analyst-eval
+
+PODMAN_MACHINE ?= podman-machine-default
 
 install:
 	python3 -m venv .venv
@@ -25,6 +27,12 @@ scorecard:
 
 snowflake-deploy:
 	.venv/bin/python scripts/deploy_snowflake.py --connection supplychain-hackathon-admin
+
+snowflake-upgrade:
+	.venv/bin/python scripts/deploy_snowflake.py --connection supplychain-hackathon-admin --start-at 008_quantity_aware_scenarios.sql
+
+snowflake-host:
+	.venv/bin/python scripts/deploy_spcs.py --connection supplychain-hackathon-admin --planner-users "$(PLANNER_USERS)" --approver-users "$(APPROVER_USERS)" --podman-machine "$(PODMAN_MACHINE)"
 
 snowflake-validate:
 	.venv/bin/python scripts/validate_snowflake_runtime.py --connection supplychain-hackathon

@@ -88,3 +88,81 @@ def test_order_risk_uses_cumulative_allocation_by_required_date() -> None:
     assert {item["order_id"] for item in result["protected_sales_orders"]} == {"SO-CUM-1"}
     assert {item["order_id"] for item in result["affected_sales_orders"]} == {"SO-CUM-2"}
     assert result["revenue_at_risk"] == 120_000
+
+
+def test_on_time_inbound_must_have_enough_quantity_to_protect_an_order() -> None:
+    repo = FixtureRepository()
+    for shipment in repo._data["shipments"]:
+        if shipment["shipment_id"] == "SHP-8801":
+            shipment["quantity"] = 10
+
+    result = SupplyChainService(repo).trace_order_impact(
+        "PRT-AX14",
+        1,
+        "SUP-042",
+    )
+
+    assert result["affected_sales_orders"][0]["order_id"] == "SO-7101"
+    assert result["affected_sales_orders"][0]["shortage_quantity"] == 210
+
+
+def test_engine_supports_a_second_disrupted_supplier_without_self_recommendation() -> None:
+    repo = FixtureRepository()
+    repo._data["disruption_events"].append(
+        {
+            "disruption_id": "DIS-2026-018",
+            "supplier_id": "SUP-018",
+            "delay_days": 7,
+            "reported_at": "2026-09-29T09:00:00+05:30",
+            "status": "ACTIVE",
+            "source_document_id": None,
+        }
+    )
+    repo._data["shipments"].append(
+        {
+            "shipment_id": "SHP-1801",
+            "supplier_id": "SUP-018",
+            "part_id": "PRT-CTRL9",
+            "plant_id": "PLT-BLR",
+            "quantity": 225,
+            "promised_date": "2026-10-06",
+            "status": "IN_TRANSIT",
+            "source_system": "TMS",
+            "updated_at": "2026-09-29T09:00:00+05:30",
+        }
+    )
+    service = SupplyChainService(repo)
+
+    result = service.analyze_supplier_delay("SUP-018", 7, record_audit=False)
+    alternatives = service.list_approved_alternatives(
+        "PRT-CTRL9",
+        "PLT-BLR",
+        delay_days=7,
+        disrupted_supplier_id="SUP-018",
+    )
+
+    assert result["supplier"]["supplier_id"] == "SUP-018"
+    assert "SUP-018" not in {
+        item["supplier_id"] for item in alternatives["approved_alternatives"]
+    }
+
+
+def test_scenario_comparison_and_evidence_provenance_are_explicit() -> None:
+    service = make_service()
+
+    comparison = service.compare_delay_scenarios("SUP-042", [3, 7, 14])
+    analysis = service.analyze_supplier_delay("SUP-042", 14, record_audit=False)
+    shipment_evidence = {
+        item["reference_id"]: item
+        for item in analysis["evidence"]
+        if item["source_type"] == "Shipment scenario"
+    }
+
+    assert [item["revenue_at_risk"] for item in comparison["scenarios"]] == [
+        0,
+        436_000,
+        586_000,
+    ]
+    assert comparison["first_exposure_delay_days"] == 7
+    assert shipment_evidence["SHP-8801"]["observed_at"] == "2026-09-29T08:24:00+05:30"
+    assert shipment_evidence["SHP-8801"]["evidence_status"] == "SCENARIO_PROJECTION"

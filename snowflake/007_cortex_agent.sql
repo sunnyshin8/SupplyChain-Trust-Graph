@@ -7,7 +7,7 @@ USE DATABASE SUPPLYCHAIN_TRUST_GRAPH;
 USE SCHEMA GOVERNED;
 
 CREATE OR REPLACE SECURE AGENT SUPPLYCHAIN_TRUST_AGENT
-  COMMENT = 'Read-only governed supply-chain impact analyst for the hackathon demo'
+  COMMENT = 'Read-only governed supply-chain impact analyst for product validation'
   PROFILE = '{"display_name":"SupplyChain Trust Agent","color":"blue"}'
   FROM SPECIFICATION
   $$

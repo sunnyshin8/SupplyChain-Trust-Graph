@@ -2,7 +2,11 @@ import pytest
 
 from app.data import FixtureRepository
 from app.models import DisruptionContext, MitigationOption
-from app.service import SupplyChainService
+from app.service import (
+    GovernanceAuthorizationError,
+    GovernanceConflictError,
+    SupplyChainService,
+)
 
 
 def draft(service: SupplyChainService):
@@ -18,7 +22,7 @@ def test_owner_cannot_approve_own_draft() -> None:
     service = SupplyChainService(FixtureRepository())
     action = draft(service)
 
-    with pytest.raises(ValueError, match="Separation-of-duties"):
+    with pytest.raises(GovernanceAuthorizationError, match="Separation-of-duties"):
         service.approve_mitigation(
             action.action_id,
             "Maya Iyer · Supply Planning",
@@ -92,6 +96,29 @@ def test_approval_is_idempotent_and_versioned() -> None:
     ]
     assert len(approval_events) == 1
     assert first.audit_id == approval_events[0]["audit_id"]
+
+
+def test_idempotency_key_cannot_replay_another_approvers_decision() -> None:
+    service = SupplyChainService(FixtureRepository())
+    action = draft(service)
+    service.approve_mitigation(
+        action.action_id,
+        "Aisha Rao · VP Operations",
+        "aisha.rao",
+        action.version,
+        "Reviewed governed evidence and qualification.",
+        "shared-key-v1",
+    )
+
+    with pytest.raises(GovernanceConflictError, match="already APPROVED"):
+        service.approve_mitigation(
+            action.action_id,
+            "Second Reviewer · Operations",
+            "second.reviewer",
+            action.version,
+            "Independent second decision.",
+            "shared-key-v1",
+        )
 
 
 def test_draft_audit_id_resolves_to_real_event() -> None:

@@ -49,7 +49,7 @@ relationships:
 governed_metrics:
   revenue_at_risk:
     version: 1.0.0
-    definition: Sum affected open-order value when projected supply is after the required date and allocatable stock cannot cover the order.
+    definition: Sum open-order value when protected stock plus inbound supply arriving by the required date cannot satisfy cumulative demand.
     safety_stock_policy: protected
   on_time_delivery_rate:
     version: 1.0.0

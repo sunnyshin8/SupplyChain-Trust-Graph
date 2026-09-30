@@ -17,6 +17,7 @@ MIGRATIONS = (
     ROOT / "snowflake/005_security_zones.sql",
     ROOT / "snowflake/006_core_isolation_fix.sql",
     ROOT / "snowflake/007_cortex_agent.sql",
+    ROOT / "snowflake/008_quantity_aware_scenarios.sql",
 )
 
 
@@ -29,7 +30,13 @@ def _contains_failed_assertion(rows: list[tuple[Any, ...]]) -> bool:
     )
 
 
-def deploy(connection_name: str) -> dict[str, Any]:
+def deploy(connection_name: str, start_at: str | None = None) -> dict[str, Any]:
+    migrations = list(MIGRATIONS)
+    if start_at:
+        matching = [index for index, path in enumerate(migrations) if path.name == start_at]
+        if not matching:
+            raise ValueError(f"Unknown migration: {start_at}")
+        migrations = migrations[matching[0]:]
     evidence: dict[str, Any] = {
         "connection_name": connection_name,
         "status": "RUNNING",
@@ -51,7 +58,7 @@ def deploy(connection_name: str) -> dict[str, Any]:
         }
         context_cursor.close()
 
-        for migration in MIGRATIONS:
+        for migration in migrations:
             item: dict[str, Any] = {"file": str(migration.relative_to(ROOT)), "query_ids": []}
             try:
                 for cursor in connection.execute_string(migration.read_text(encoding="utf-8")):
@@ -88,8 +95,12 @@ def main() -> None:
         description="Deploy and validate SupplyChain Trust Graph in Snowflake."
     )
     parser.add_argument("--connection", default="supplychain-hackathon-admin")
+    parser.add_argument(
+        "--start-at",
+        help="Apply this migration and later files without replaying destructive seed setup.",
+    )
     args = parser.parse_args()
-    print(json.dumps(deploy(args.connection), indent=2, default=str))
+    print(json.dumps(deploy(args.connection, args.start_at), indent=2, default=str))
 
 
 if __name__ == "__main__":

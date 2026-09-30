@@ -141,6 +141,7 @@ def main() -> None:
     try:
         cursor = connection.cursor(snowflake.connector.DictCursor)
         cursor.execute("USE SECONDARY ROLES NONE")
+        cursor.execute("USE ROLE SUPPLYCHAIN_APP_READONLY")
         for case_id, question, validator in CASES:
             sql, request_id = _run_analyst(args.connection, args.view, question)
             cursor.execute(sql)
@@ -163,6 +164,7 @@ def main() -> None:
 
         suffix = uuid4().hex[:8].upper()
         audit_id = f"AUD-COCO-EVAL-{suffix}"
+        cursor.execute("USE ROLE SUPPLYCHAIN_APP_RUNTIME")
         cursor.execute(
             """
             INSERT INTO SUPPLYCHAIN_TRUST_GRAPH.AUDIT.AUDIT_EVENTS

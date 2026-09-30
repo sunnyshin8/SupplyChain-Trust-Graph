@@ -4,7 +4,7 @@ import json
 
 from .data import FixtureRepository
 from .models import DisruptionContext, MitigationOption
-from .service import SupplyChainService
+from .service import GovernanceAuthorizationError, SupplyChainService
 
 
 def run_scorecard() -> dict[str, object]:
@@ -91,7 +91,7 @@ def run_scorecard() -> dict[str, object]:
             "Self approval must be rejected by policy.",
             "scorecard-self-v1",
         )
-    except ValueError:
+    except GovernanceAuthorizationError:
         separation_blocked = True
     approved = service.approve_mitigation(
         action.action_id,

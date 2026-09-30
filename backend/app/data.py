@@ -38,8 +38,8 @@ FIXTURES: dict[str, list[dict[str, Any]]] = {
         {"part_id": "PRT-CTRL9", "plant_id": "PLT-BLR", "on_hand": 95, "safety_stock": 60, "daily_demand": 12, "snapshot_at": "2026-09-29T08:00:00+05:30"},
     ],
     "shipments": [
-        {"shipment_id": "SHP-8801", "supplier_id": "SUP-042", "part_id": "PRT-AX14", "plant_id": "PLT-PUN", "quantity": 420, "promised_date": "2026-10-03", "status": "IN_TRANSIT", "source_system": "TMS"},
-        {"shipment_id": "SHP-8802", "supplier_id": "SUP-042", "part_id": "PRT-CTRL9", "plant_id": "PLT-BLR", "quantity": 180, "promised_date": "2026-10-05", "status": "IN_TRANSIT", "source_system": "TMS"},
+        {"shipment_id": "SHP-8801", "supplier_id": "SUP-042", "part_id": "PRT-AX14", "plant_id": "PLT-PUN", "quantity": 470, "promised_date": "2026-10-03", "status": "IN_TRANSIT", "source_system": "TMS", "updated_at": "2026-09-29T08:24:00+05:30"},
+        {"shipment_id": "SHP-8802", "supplier_id": "SUP-042", "part_id": "PRT-CTRL9", "plant_id": "PLT-BLR", "quantity": 225, "promised_date": "2026-10-05", "status": "IN_TRANSIT", "source_system": "TMS", "updated_at": "2026-09-29T08:27:00+05:30"},
         {"shipment_id": "SHP-H001", "supplier_id": "SUP-017", "part_id": "PRT-AX14", "plant_id": "PLT-PUN", "quantity": 300, "promised_date": "2026-08-01", "received_date": "2026-07-31", "status": "RECEIVED", "source_system": "TMS"},
         {"shipment_id": "SHP-H002", "supplier_id": "SUP-042", "part_id": "PRT-AX14", "plant_id": "PLT-PUN", "quantity": 250, "promised_date": "2026-08-15", "received_date": "2026-08-18", "status": "RECEIVED", "source_system": "TMS"},
         {"shipment_id": "SHP-H003", "supplier_id": "SUP-018", "part_id": "PRT-CTRL9", "plant_id": "PLT-BLR", "quantity": 160, "promised_date": "2026-09-01", "received_date": "2026-09-01", "status": "RECEIVED", "source_system": "TMS"},
@@ -102,6 +102,12 @@ class FixtureRepository:
         with self.lock:
             self.audit_events.insert(0, deepcopy(event))
 
+    def refresh_workflow_state(self) -> None:
+        """Refresh durable actions before list/decision operations.
+
+        Fixture mode is already process-local and current.
+        """
+
     def create_action_with_audit(
         self,
         action: dict[str, Any],
@@ -154,6 +160,9 @@ class FixtureRepository:
             },
         }
 
+    def health_check(self) -> dict[str, Any]:
+        return {"database": "not_applicable", "connected": True}
+
     def close(self) -> None:
         """Release repository resources; fixture mode has none."""
 
@@ -167,10 +176,12 @@ def build_repository() -> FixtureRepository:
 
     from .snowflake_repository import SnowflakeRepository
 
+    token_path = os.getenv("SNOWFLAKE_TOKEN_PATH", "/snowflake/session/token")
+    running_in_spcs = os.path.isfile(token_path)
     connection_name = os.getenv("SNOWFLAKE_CONNECTION_NAME", "supplychain-hackathon").strip()
-    if not connection_name:
+    if not connection_name and not running_in_spcs:
         raise RuntimeError("SNOWFLAKE_CONNECTION_NAME is required in Snowflake mode.")
-    return SnowflakeRepository(connection_name)
+    return SnowflakeRepository(None if running_in_spcs else connection_name)
 
 
 repository = build_repository()

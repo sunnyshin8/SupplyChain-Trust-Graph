@@ -1,0 +1,33 @@
+spec:
+  containers:
+  - name: web
+    image: /supplychain_trust_graph/app/supplychain_images/supplychain-web:__IMAGE_TAG__
+    env:
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    mountSessionToken: false
+    readinessProbe:
+      port: 3000
+      path: /healthz
+  - name: api
+    image: /supplychain_trust_graph/app/supplychain_images/supplychain-api:__IMAGE_TAG__
+    env:
+      PORT: "8000"
+      SUPPLYCHAIN_DATA_MODE: snowflake
+      SUPPLYCHAIN_IDENTITY_MODE: spcs
+      SUPPLYCHAIN_PLANNER_USERS: __PLANNER_USERS__
+      SUPPLYCHAIN_APPROVER_USERS: __APPROVER_USERS__
+      SNOWFLAKE_WAREHOUSE: COMPUTE_WH
+      SUPPLYCHAIN_SNAPSHOT_TTL_SECONDS: "30"
+    readinessProbe:
+      port: 8000
+      path: /health
+  endpoints:
+  - name: web
+    port: 3000
+    protocol: HTTP
+    public: true
+serviceRoles:
+- name: ui_usage
+  endpoints:
+  - web
