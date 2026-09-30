@@ -1,0 +1,59 @@
+name: supply_chain_trust_graph
+version: 1.0.0
+source_of_truth: SUPPLYCHAIN_TRUST_GRAPH.GOVERNED
+entities:
+  Supplier:
+    table: SUPPLIERS
+    primary_key: SUPPLIER_ID
+  Part:
+    table: PARTS
+    primary_key: PART_ID
+  SupplierPart:
+    table: SUPPLIER_PARTS
+    primary_key: [SUPPLIER_ID, PART_ID, PLANT_ID]
+  Plant:
+    table: PLANTS
+    primary_key: PLANT_ID
+  Inventory:
+    table: INVENTORY
+    grain: [PART_ID, PLANT_ID, SNAPSHOT_AT]
+  Shipment:
+    table: SHIPMENTS
+    primary_key: SHIPMENT_ID
+  SalesOrder:
+    table: SALES_ORDERS
+    primary_key: ORDER_ID
+  Customer:
+    table: CUSTOMERS
+    primary_key: CUSTOMER_ID
+  SupplierDocument:
+    table: SUPPLIER_DOCUMENTS
+    primary_key: DOCUMENT_ID
+  DisruptionEvent:
+    table: DISRUPTION_EVENTS
+    primary_key: DISRUPTION_ID
+  MitigationAction:
+    table: MITIGATION_ACTIONS
+    primary_key: ACTION_ID
+  AuditEvent:
+    table: AUDIT_EVENTS
+    primary_key: AUDIT_ID
+relationships:
+  - Supplier supplies Part: SUPPLIER_PARTS.SUPPLIER_ID -> SUPPLIERS.SUPPLIER_ID; SUPPLIER_PARTS.PART_ID -> PARTS.PART_ID
+  - Part is stocked at Plant: INVENTORY.PART_ID -> PARTS.PART_ID; INVENTORY.PLANT_ID -> PLANTS.PLANT_ID
+  - Part is used by Sales Order: SALES_ORDERS.PART_ID -> PARTS.PART_ID
+  - Plant receives Shipment: SHIPMENTS.PLANT_ID -> PLANTS.PLANT_ID
+  - Shipment fulfills Sales Order: SHIPMENTS.ORDER_ID -> SALES_ORDERS.ORDER_ID
+  - Sales Order belongs to Customer: SALES_ORDERS.CUSTOMER_ID -> CUSTOMERS.CUSTOMER_ID
+  - Supplier Document provides evidence: SUPPLIER_DOCUMENTS.SUPPLIER_ID -> SUPPLIERS.SUPPLIER_ID; SUPPLIER_DOCUMENTS.PART_ID -> PARTS.PART_ID
+governed_metrics:
+  revenue_at_risk:
+    version: 1.0.0
+    definition: Sum affected open-order value when projected supply is after the required date and allocatable stock cannot cover the order.
+    safety_stock_policy: protected
+  on_time_delivery_rate:
+    version: 1.0.0
+    definition: Deliveries received on or before promised date divided by deliveries due.
+  plant_stockout_risk:
+    version: 1.0.0
+    definition: Inventory plus confirmed inbound supply is below projected demand during the lead-time window.

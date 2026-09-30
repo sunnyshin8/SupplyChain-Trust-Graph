@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "supplychain-trust-graph"
+version = "0.1.0"
+description = "Governed supply-chain intelligence exposed through FastAPI and MCP"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "mcp>=1.13,<2",
+  "pydantic>=2.11,<3",
+  "snowflake-connector-python[secure-local-storage]>=3.18,<5",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<9",
+  "pytest-cov>=6.2,<7",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
