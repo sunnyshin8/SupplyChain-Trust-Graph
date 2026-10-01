@@ -54,6 +54,9 @@ APP_CSS = """
   [data-testid="stSidebar"] h3 { font-size: 1rem !important; font-weight: 700 !important; margin: 0 0 .1rem !important; }
   [data-testid="stSidebar"] label, [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: var(--ink-2); font-size: .8rem !important; font-weight: 600; }
   [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { font-size: .86rem; line-height: 1.45; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] { margin: .35rem 0 .9rem; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label { padding: .25rem 0; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] p { font-size: .84rem; }
   [data-testid="stSidebar"] [data-baseweb="select"] > div { border-radius: var(--radius-sm); border-color: var(--line-strong); background: var(--panel-2); min-height: 2.25rem; }
     [data-testid="stSlider"] { padding: .35rem .7rem .2rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
     [data-testid="stSlider"] [data-orientation="horizontal"] > [data-orientation="horizontal"] { min-height: 2rem; }
@@ -61,6 +64,9 @@ APP_CSS = """
     [data-testid="stSliderThumbValue"] { padding: .08rem .35rem; border-radius: 999px; background: var(--accent); color: #fff !important; font-size: .7rem; font-weight: 700; box-shadow: 0 1px 2px rgba(31, 35, 53, .12); }
     [data-testid="stSliderThumbValue"] p, [data-testid="stSliderTickBar"] p { color: inherit !important; font-size: .7rem !important; }
     [data-testid="stSliderTickBar"] { color: var(--muted); }
+    .sidebar-note { margin: .85rem 0 .15rem; padding: .8rem .85rem; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--accent-soft); }
+    .sidebar-note strong { display: block; color: var(--accent); font-size: .78rem; }
+    .sidebar-note span { display: block; margin-top: .3rem; color: var(--ink-2); font-size: .75rem; line-height: 1.45; }
   .hero { padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); margin-bottom: .75rem; border-top: 3px solid var(--accent); }
   .eyebrow { color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
   .hero h1 { margin: .3rem 0 .35rem; padding: 0; font-size: clamp(1.4rem, 2.4vw, 1.9rem); font-weight: 700; line-height: 1.18; letter-spacing: -.02em; }
@@ -99,6 +105,13 @@ APP_CSS = """
   .source-card p { color: var(--muted); font-size: .84rem; line-height: 1.5; margin: .35rem 0 0; }
   .guardrail { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--radius); padding: .75rem .9rem; font-size: .86rem; line-height: 1.5; color: var(--ink-2); }
   .guardrail strong { color: var(--accent); }
+    .story-hero, .about-hero { padding: 1.35rem; border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); }
+    .story-hero h1, .about-hero h1 { margin: .3rem 0 .6rem; font-size: clamp(1.65rem, 3vw, 2.35rem); line-height: 1.15; }
+    .story-hero p, .about-hero p { max-width: 740px; margin: 0; color: var(--muted); font-size: .98rem; line-height: 1.6; }
+    .story-step, .about-card { height: 100%; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); }
+    .story-step small, .about-card small { color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .story-step h3, .about-card h3 { margin: .4rem 0 !important; font-size: 1rem !important; }
+    .story-step p, .about-card p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
   .stButton > button, .stDownloadButton > button { border-radius: var(--radius-sm); font-size: .85rem; font-weight: 600; min-height: 2.25rem; padding: .35rem .9rem; border-color: var(--line-strong); box-shadow: var(--shadow); }
   .stButton > button[kind="primary"] { background: var(--accent); border-color: var(--accent); }
   .stButton > button[kind="primary"]:hover { background: #463bc4; border-color: #463bc4; }
@@ -274,6 +287,12 @@ with st.sidebar:
     st.markdown("### SupplyChain Trust Graph")
     st.caption("Governed disruption intelligence")
     st.divider()
+    app_page = st.radio(
+        "Explore",
+        ["Decision workspace", "Our story", "About us"],
+        label_visibility="collapsed",
+    )
+    st.divider()
     supplier_id = st.selectbox("Disrupted supplier", ["SUP-042"], index=0)
     delay_days = st.slider("Delay scenario", min_value=1, max_value=30, value=14, step=1)
     st.caption("Scenario changes projections only; source records remain immutable.")
@@ -288,6 +307,15 @@ with st.sidebar:
         st.cache_resource.clear()
         st.rerun()
     st.divider()
+    st.markdown(
+        """
+        <div class="sidebar-note">
+          <strong>Evidence before action</strong>
+          <span>Every public view explains risk, cites its governed inputs, and stops before any operational change.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.caption("Public showcase · no Snowflake login · no ERP execution")
 
 
@@ -301,6 +329,69 @@ try:
     metrics = service.governed_metrics()
 except Exception as exc:
     st.error(f"Governed analysis unavailable: {exc}")
+    st.stop()
+
+
+if app_page == "Our story":
+    st.markdown(
+        """
+        <section class="story-hero">
+          <div class="eyebrow">Why this exists</div>
+          <h1>Turn a late shipment into a decision people can trust.</h1>
+          <p>A supply disruption begins as a small signal. The difficult part is tracing it through inventory, customer commitments and qualified recovery options without losing the evidence or bypassing the people who must approve the change.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("### The decision journey")
+    story_columns = st.columns(3)
+    story_steps = [
+        ("01 · Signal", "A supplier delay is reported", "The scenario starts with a declared disruption and preserves its source reference."),
+        ("02 · Proof", "The blast radius is calculated", "Governed inventory, shipment and order data show which commitments become exposed."),
+        ("03 · Action", "Only approved options move forward", "Qualified alternatives are ranked with evidence while approvals and execution stay behind a human boundary."),
+    ]
+    for column, (label, title, detail) in zip(story_columns, story_steps):
+        with column:
+            st.markdown(
+                f"<article class='story-step'><small>{label}</small><h3>{title}</h3><p>{detail}</p></article>",
+                unsafe_allow_html=True,
+            )
+    st.markdown("### What the public showcase proves")
+    st.info(
+        "The experience demonstrates governed reasoning and evidence-linked recommendations. "
+        "It intentionally cannot approve a mitigation, mutate Snowflake data, or execute an ERP action."
+    )
+    st.stop()
+
+
+if app_page == "About us":
+    st.markdown(
+        """
+        <section class="about-hero">
+          <div class="eyebrow">About SupplyChain Trust Graph</div>
+          <h1>Decision intelligence with an audit trail.</h1>
+          <p>SupplyChain Trust Graph is a governed supply-chain decision experience for making disruption impact understandable, traceable and reviewable before anyone changes an operational plan.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    about_columns = st.columns(3)
+    about_cards = [
+        ("Scope", "What it does", "Connects supplier delays to affected parts, plants, orders and customer exposure."),
+        ("Controls", "What it protects", "Keeps read-only analysis, evidence, approval and execution boundaries explicit."),
+        ("Trust", "How it stays grounded", "Uses governed metrics, qualified alternatives and source references instead of unsupported guesses."),
+    ]
+    for column, (label, title, detail) in zip(about_columns, about_cards):
+        with column:
+            st.markdown(
+                f"<article class='about-card'><small>{label}</small><h3>{title}</h3><p>{detail}</p></article>",
+                unsafe_allow_html=True,
+            )
+    st.markdown("### Public boundary")
+    st.markdown(
+        "<div class='guardrail'><strong>Designed to explain, not execute.</strong> The public app can show governed impact and prepared options, but cannot write records, submit approvals, switch roles or trigger external systems.</div>",
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 
