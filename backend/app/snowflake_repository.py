@@ -265,12 +265,14 @@ class SnowflakeRepository(FixtureRepository):
             ORDER BY CREATED_AT DESC
             """
         )
-        idempotency = self._fetch(
-            """
-            SELECT CACHE_KEY, RESULT
-            FROM SUPPLYCHAIN_TRUST_GRAPH.WORKFLOW.DECISION_IDEMPOTENCY
-            """
-        )
+        idempotency = []
+        if self.connection_name != "STREAMLIT_READONLY_SERVICE_IDENTITY":
+            idempotency = self._fetch(
+                """
+                SELECT CACHE_KEY, RESULT
+                FROM SUPPLYCHAIN_TRUST_GRAPH.WORKFLOW.DECISION_IDEMPOTENCY
+                """
+            )
         governed_metric_rows = self._fetch(
             """
             SELECT COALESCE(SUM(AT_RISK_VALUE), 0) AS REVENUE_AT_RISK,
