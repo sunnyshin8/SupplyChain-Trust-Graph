@@ -22,25 +22,26 @@ st.set_page_config(
 APP_CSS = """
 <style>
   :root {
-    --ink: #172a3a;
-    --muted: #647487;
-    --paper: #f8f4ec;
-    --panel: #fffdf8;
-    --line: #ded4c6;
-    --accent: #c55a3d;
-    --blue: #315c8a;
-    --amber: #b97819;
+        --ink: #22263a;
+        --muted: #777d92;
+        --paper: #f6f7fb;
+        --panel: #ffffff;
+        --line: #e7e8f0;
+        --accent: #584bdc;
+        --blue: #3475d7;
+        --amber: #bd7212;
+        --red: #d74e62;
   }
   .stApp { background: var(--paper); color: var(--ink); }
-  [data-testid="stSidebar"] { background: #efe7db; border-right: 1px solid var(--line); }
-  [data-testid="stHeader"] { background: rgba(248, 244, 236, .86); }
+    [data-testid="stSidebar"] { background: rgba(255, 255, 255, .94); border-right: 1px solid var(--line); }
+    [data-testid="stHeader"] { background: rgba(246, 247, 251, .86); }
   h1, h2, h3 { color: var(--ink); letter-spacing: -.025em; }
   .hero {
     padding: 1.35rem 1.5rem;
     border: 1px solid var(--line);
     border-radius: 22px;
-    background: linear-gradient(135deg, #fffdf8 0%, #f2e8dc 100%);
-    box-shadow: 0 18px 50px rgba(55, 42, 31, .08);
+        background: linear-gradient(135deg, #ffffff 0%, #f7f5ff 100%);
+        box-shadow: 0 18px 48px rgba(38, 42, 73, .08);
     margin-bottom: 1rem;
     animation: lift-in .45s ease-out both;
   }
@@ -48,19 +49,19 @@ APP_CSS = """
   .hero h1 { margin: .28rem 0 .45rem; font-size: clamp(2rem, 4vw, 3.35rem); line-height: 1.02; }
   .hero p { color: var(--muted); font-size: 1.04rem; max-width: 880px; margin: 0; }
   .trust-row { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1rem; }
-  .trust-pill { background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: .38rem .68rem; font-size: .78rem; font-weight: 700; }
-  .trust-pill.live { color: var(--blue); border-color: #9eb7cf; }
-  .risk-banner { border-left: 5px solid var(--accent); background: #fff7ef; padding: .85rem 1rem; border-radius: 10px; margin: .5rem 0 1rem; }
-  .risk-banner strong { color: #8f3527; }
-  .chain { display: grid; grid-template-columns: repeat(7, minmax(90px, 1fr)); gap: .45rem; margin: .7rem 0 1.1rem; }
-  .chain-node { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: .75rem .45rem; text-align: center; font-weight: 750; box-shadow: 0 8px 22px rgba(55, 42, 31, .05); animation: lift-in .45s ease-out both; }
+    .trust-pill { background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: .38rem .68rem; font-size: .78rem; font-weight: 700; }
+    .trust-pill.live { color: var(--blue); border-color: #cfdcf4; }
+    .risk-banner { border-left: 5px solid var(--red); background: #fff0f2; padding: .85rem 1rem; border-radius: 10px; margin: .5rem 0 1rem; }
+    .risk-banner strong { color: var(--red); }
+    .chain { display: grid; grid-template-columns: repeat(7, minmax(90px, 1fr)); gap: .45rem; margin: .7rem 0 1.1rem; }
+    .chain-node { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: .75rem .45rem; text-align: center; font-weight: 750; box-shadow: 0 8px 24px rgba(38, 42, 73, .045); animation: lift-in .45s ease-out both; }
   .chain-node span { display: block; margin-top: .2rem; color: var(--muted); font-size: .68rem; font-weight: 600; }
   .source-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: .85rem; min-height: 150px; }
   .source-card small { color: var(--accent); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
   .source-card p { color: var(--muted); font-size: .86rem; }
-  .guardrail { background: #eef3f8; border: 1px solid #c6d4e1; border-radius: 14px; padding: .9rem 1rem; }
+    .guardrail { background: #efedff; border: 1px solid #ddd8fa; border-radius: 14px; padding: .9rem 1rem; }
   .guardrail strong { color: var(--blue); }
-  div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--line); padding: .8rem 1rem; border-radius: 16px; box-shadow: 0 10px 26px rgba(55, 42, 31, .05); }
+    div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--line); padding: .8rem 1rem; border-radius: 16px; box-shadow: 0 8px 24px rgba(38, 42, 73, .045); }
   div[data-testid="stMetricValue"] { color: var(--ink); }
   .stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 750; }
   @keyframes lift-in { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
