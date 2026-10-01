@@ -55,6 +55,12 @@ APP_CSS = """
   [data-testid="stSidebar"] label, [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: var(--ink-2); font-size: .8rem !important; font-weight: 600; }
   [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { font-size: .86rem; line-height: 1.45; }
   [data-testid="stSidebar"] [data-baseweb="select"] > div { border-radius: var(--radius-sm); border-color: var(--line-strong); background: var(--panel-2); min-height: 2.25rem; }
+    [data-testid="stSlider"] { padding: .35rem .7rem .2rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
+    [data-testid="stSlider"] [data-orientation="horizontal"] > [data-orientation="horizontal"] { min-height: 2rem; }
+    [data-testid="stSlider"] [data-orientation="horizontal"] > [data-orientation="horizontal"] > div:first-child { height: .35rem !important; border-radius: 999px; background: var(--line-strong) !important; top: 50%; transform: translateY(-50%); }
+    [data-testid="stSliderThumbValue"] { padding: .08rem .35rem; border-radius: 999px; background: var(--accent); color: #fff !important; font-size: .7rem; font-weight: 700; box-shadow: 0 1px 2px rgba(31, 35, 53, .12); }
+    [data-testid="stSliderThumbValue"] p, [data-testid="stSliderTickBar"] p { color: inherit !important; font-size: .7rem !important; }
+    [data-testid="stSliderTickBar"] { color: var(--muted); }
   .hero { padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); margin-bottom: .75rem; border-top: 3px solid var(--accent); }
   .eyebrow { color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
   .hero h1 { margin: .3rem 0 .35rem; padding: 0; font-size: clamp(1.4rem, 2.4vw, 1.9rem); font-weight: 700; line-height: 1.18; letter-spacing: -.02em; }
@@ -304,7 +310,7 @@ st.markdown(
     <section class="hero">
       <div class="eyebrow">Governed supply-chain decision system</div>
       <h1>Turn disruption signals into safe, provable decisions.</h1>
-      <p>Trace supplier risk through parts, plants, inventory, shipments, orders and customers—then rank only approved recovery options with evidence attached.</p>
+      <p>Trace supplier risk through parts, plants, inventory, shipments, orders and customers then rank only approved recovery options with evidence attached.</p>
       <div class="trust-row">
         <span class="trust-pill live">{mode_label}</span>
         <span class="trust-pill">Semantic metric v1.0</span>
@@ -318,7 +324,7 @@ st.markdown(
 
 summary = analysis["risk_summary"]
 st.markdown(
-    f"<div class='risk-banner'><strong>{summary['severity']} · {supplier_id}</strong> — {summary['narrative']}</div>",
+    f"<div class='risk-banner'><strong>{summary['severity']} · {supplier_id}</strong>   {summary['narrative']}</div>",
     unsafe_allow_html=True,
 )
 
