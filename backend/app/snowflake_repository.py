@@ -266,7 +266,7 @@ class SnowflakeRepository(FixtureRepository):
             """
         )
         idempotency = []
-        if self.connection_name != "STREAMLIT_READONLY_SERVICE_IDENTITY":
+        if not self._key_pair_settings:
             idempotency = self._fetch(
                 """
                 SELECT CACHE_KEY, RESULT
