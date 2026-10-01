@@ -218,11 +218,22 @@ def _runtime() -> Runtime:
         )
     except Exception as exc:  # fail closed into an explicitly labelled preview
         repository = FixtureRepository()
+        message = str(exc)
+        for env_name in (
+            "SNOWFLAKE_ACCOUNT",
+            "SNOWFLAKE_USER",
+            "SNOWFLAKE_PRIVATE_KEY_PEM",
+        ):
+            value = os.getenv(env_name, "")
+            if value:
+                message = message.replace(value, "<redacted>")
         return Runtime(
             service=SupplyChainService(repository),
             repository=repository,
             live=False,
-            error=f"Live Snowflake connection unavailable: {type(exc).__name__}",
+            error=(
+                f"Live Snowflake connection unavailable: {type(exc).__name__}: {message}"
+            ),
         )
 
 
