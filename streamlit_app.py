@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import json
-import logging
 import os
 from typing import Any
 from uuid import uuid4
@@ -218,7 +217,6 @@ def _runtime() -> Runtime:
             error=f"Live Snowflake connection unavailable: {exc}",
         )
     except Exception as exc:  # fail closed into an explicitly labelled preview
-        logging.getLogger(__name__).exception("Live Snowflake initialization failed")
         repository = FixtureRepository()
         return Runtime(
             service=SupplyChainService(repository),
