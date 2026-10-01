@@ -157,9 +157,10 @@ def _configure_environment() -> bool:
 
     os.environ["SUPPLYCHAIN_DATA_MODE"] = "fixture"
     try:
-        values = st.secrets["snowflake"]
+        secret_values = st.secrets.to_dict()
     except (KeyError, FileNotFoundError):
         return False
+    values = secret_values.get("snowflake", secret_values)
 
     mapping = {
         "account": "SNOWFLAKE_ACCOUNT",
