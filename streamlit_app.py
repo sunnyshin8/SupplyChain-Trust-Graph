@@ -63,9 +63,14 @@ APP_CSS = """
   .guardrail strong { color: var(--blue); }
     div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--line); padding: .8rem 1rem; border-radius: 16px; box-shadow: 0 8px 24px rgba(38, 42, 73, .045); }
   div[data-testid="stMetricValue"] { color: var(--ink); }
+    div[data-testid="stMetricLabel"] { white-space: normal; }
+    [data-baseweb="tab-list"] { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; border-bottom: 0 !important; overflow: visible !important; }
+    [data-baseweb="tab"] { align-items: center; justify-content: center; min-height: 2.6rem; padding: .5rem .65rem; border: 1px solid var(--line) !important; border-radius: 9px !important; background: var(--panel) !important; color: var(--muted) !important; white-space: nowrap; }
+    [data-baseweb="tab"][aria-selected="true"] { border-color: #cfc9fa !important; background: #efedff !important; color: var(--accent) !important; }
+    [data-baseweb="tab-highlight"] { display: none !important; }
   .stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 750; }
   @keyframes lift-in { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-  @media (max-width: 900px) { .chain { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
+    @media (max-width: 900px) { .chain { grid-template-columns: repeat(2, minmax(120px, 1fr)); } [data-baseweb="tab-list"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 """
 
@@ -269,12 +274,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-metric_columns = st.columns(5)
-metric_columns[0].metric("Revenue at risk", money(summary["revenue_at_risk"]))
-metric_columns[1].metric("Orders at risk", summary["impacted_orders"])
-metric_columns[2].metric("Plants exposed", len(analysis["affected_plants"]))
-metric_columns[3].metric("Strategic customers", len([item for item in analysis["affected_customers"] if item["tier"] == "Strategic"]))
-metric_columns[4].metric("On-time delivery", f"{round((metrics['on_time_delivery_rate'] or 0) * 100)}%")
+metric_row_one = st.columns(3)
+metric_row_one[0].metric("Revenue at risk", money(summary["revenue_at_risk"]))
+metric_row_one[1].metric("Orders at risk", summary["impacted_orders"])
+metric_row_one[2].metric("Plants exposed", len(analysis["affected_plants"]))
+metric_row_two = st.columns(2)
+metric_row_two[0].metric("Strategic customers", len([item for item in analysis["affected_customers"] if item["tier"] == "Strategic"]))
+metric_row_two[1].metric("On-time delivery", f"{round((metrics['on_time_delivery_rate'] or 0) * 100)}%")
 
 tabs = st.tabs(
     [
@@ -333,7 +339,7 @@ with tabs[1]:
     comparison = service.compare_delay_scenarios(supplier_id, [3, 7, 14, 21])
     scenario_frame = pd.DataFrame(comparison["scenarios"])
     chart_frame = scenario_frame.set_index("delay_days")[["revenue_at_risk"]]
-    st.bar_chart(chart_frame, color="#C55A3D")
+    st.bar_chart(chart_frame, color="#584BDC")
     table(
         comparison["scenarios"],
         {
