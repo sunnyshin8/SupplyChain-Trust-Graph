@@ -204,6 +204,14 @@ def _runtime() -> Runtime:
             repository=repository,
             live=True,
         )
+    except RuntimeError as exc:
+        repository = FixtureRepository()
+        return Runtime(
+            service=SupplyChainService(repository),
+            repository=repository,
+            live=False,
+            error=f"Live Snowflake connection unavailable: {exc}",
+        )
     except Exception as exc:  # fail closed into an explicitly labelled preview
         repository = FixtureRepository()
         return Runtime(
