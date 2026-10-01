@@ -152,7 +152,7 @@ class Runtime:
     error: str | None = None
 
 
-def _configure_environment() -> bool:
+def _configure_environment() -> dict[str, str] | None:
     """Copy Streamlit secrets into process env without logging secret values."""
 
     os.environ["SUPPLYCHAIN_DATA_MODE"] = "fixture"
@@ -169,19 +169,20 @@ def _configure_environment() -> bool:
         "role": "SNOWFLAKE_ROLE",
         "warehouse": "SNOWFLAKE_WAREHOUSE",
     }
+    settings: dict[str, str] = {}
     for secret_name, env_name in mapping.items():
         value = values.get(secret_name)
         if value:
-            os.environ[env_name] = str(value)
-    return all(
-        os.getenv(name, "").strip()
-        for name in ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PRIVATE_KEY_PEM")
-    )
+            settings[secret_name] = str(value)
+            os.environ[env_name] = settings[secret_name]
+    required = ("account", "user", "private_key")
+    return settings if all(settings.get(name, "").strip() for name in required) else None
 
 
 @st.cache_resource(show_spinner="Connecting to governed Snowflake data…")
 def _runtime() -> Runtime:
-    configured = _configure_environment()
+    key_pair_settings = _configure_environment()
+    configured = key_pair_settings is not None
     named_connection = os.getenv("SNOWFLAKE_CONNECTION_NAME", "").strip()
     from backend.app.data import FixtureRepository
     from backend.app.service import SupplyChainService
@@ -198,7 +199,10 @@ def _runtime() -> Runtime:
     try:
         from backend.app.snowflake_repository import SnowflakeRepository
 
-        repository = SnowflakeRepository(None if configured else named_connection)
+        repository = SnowflakeRepository(
+            None if configured else named_connection,
+            key_pair_settings=key_pair_settings,
+        )
         return Runtime(
             service=SupplyChainService(repository),
             repository=repository,

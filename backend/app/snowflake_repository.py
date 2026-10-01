@@ -100,11 +100,17 @@ class SnowflakeRepository(FixtureRepository):
     no password, token, or account secret is read from this repository.
     """
 
-    def __init__(self, connection_name: str | None) -> None:
+    def __init__(
+        self,
+        connection_name: str | None,
+        *,
+        key_pair_settings: dict[str, str] | None = None,
+    ) -> None:
         super().__init__()
         self.mode = "snowflake"
         self.source_system = "SNOWFLAKE_GOVERNED"
         self.connection_name = connection_name
+        self._key_pair_settings = key_pair_settings
         self._snapshot_ttl_seconds = max(
             5,
             int(os.getenv("SUPPLYCHAIN_SNAPSHOT_TTL_SECONDS", "30")),
@@ -120,6 +126,11 @@ class SnowflakeRepository(FixtureRepository):
             raise RuntimeError(
                 "Snowflake mode requires snowflake-connector-python. Run make install."
             ) from exc
+        key_pair_settings = getattr(self, "_key_pair_settings", None) or {}
+        private_key_pem = (
+            key_pair_settings.get("private_key")
+            or os.getenv("SNOWFLAKE_PRIVATE_KEY_PEM", "")
+        ).replace("\\n", "\n").strip()
         token_path = os.getenv("SNOWFLAKE_TOKEN_PATH", "/snowflake/session/token")
         if os.path.isfile(token_path):
             with open(token_path, encoding="utf-8") as token_file:
@@ -139,6 +150,55 @@ class SnowflakeRepository(FixtureRepository):
                 database="SUPPLYCHAIN_TRUST_GRAPH",
             )
             self.connection_name = "SPCS_SERVICE_IDENTITY"
+        elif private_key_pem:
+            try:
+                from cryptography.hazmat.primitives import serialization
+            except ImportError as exc:  # pragma: no cover - connector dependency
+                raise RuntimeError(
+                    "Key-pair authentication requires the cryptography package."
+                ) from exc
+
+            account = (
+                key_pair_settings.get("account")
+                or os.getenv("SNOWFLAKE_ACCOUNT", "")
+            ).strip()
+            user = (
+                key_pair_settings.get("user") or os.getenv("SNOWFLAKE_USER", "")
+            ).strip()
+            if not account or not user or not private_key_pem:
+                raise RuntimeError(
+                    "Key-pair mode requires SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, "
+                    "and SNOWFLAKE_PRIVATE_KEY_PEM."
+                )
+            private_key = serialization.load_pem_private_key(
+                private_key_pem.encode("utf-8"),
+                password=None,
+            ).private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+            role = (
+                key_pair_settings.get("role")
+                or os.getenv("SNOWFLAKE_ROLE", "SUPPLYCHAIN_APP_READONLY")
+            ).strip()
+            if role.upper() != "SUPPLYCHAIN_APP_READONLY":
+                raise RuntimeError(
+                    "External public runtimes are restricted to "
+                    "SUPPLYCHAIN_APP_READONLY."
+                )
+            connection = snowflake.connector.connect(
+                account=account,
+                user=user,
+                private_key=private_key,
+                role=role,
+                warehouse=(
+                    key_pair_settings.get("warehouse")
+                    or os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")
+                ),
+                database="SUPPLYCHAIN_TRUST_GRAPH",
+            )
+            self.connection_name = "STREAMLIT_READONLY_SERVICE_IDENTITY"
         else:
             if not self.connection_name:
                 raise RuntimeError("SNOWFLAKE_CONNECTION_NAME is required outside SPCS.")
