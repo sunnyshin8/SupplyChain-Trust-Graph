@@ -64,13 +64,13 @@ APP_CSS = """
     div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--line); padding: .8rem 1rem; border-radius: 16px; box-shadow: 0 8px 24px rgba(38, 42, 73, .045); }
   div[data-testid="stMetricValue"] { color: var(--ink); }
     div[data-testid="stMetricLabel"] { white-space: normal; }
-    [data-baseweb="tab-list"] { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; border-bottom: 0 !important; overflow: visible !important; }
-    [data-baseweb="tab"] { align-items: center; justify-content: center; min-height: 2.6rem; padding: .5rem .65rem; border: 1px solid var(--line) !important; border-radius: 9px !important; background: var(--panel) !important; color: var(--muted) !important; white-space: nowrap; }
-    [data-baseweb="tab"][aria-selected="true"] { border-color: #cfc9fa !important; background: #efedff !important; color: var(--accent) !important; }
-    [data-baseweb="tab-highlight"] { display: none !important; }
+    div[role="tablist"] { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; border-bottom: 0 !important; overflow: visible !important; }
+    div[data-testid="stTab"] { align-items: center; justify-content: center; min-height: 2.6rem; padding: .5rem .65rem; border: 1px solid var(--line) !important; border-radius: 9px !important; background: var(--panel) !important; color: var(--muted) !important; white-space: nowrap; }
+    div[data-testid="stTab"][data-selected="true"] { border-color: #cfc9fa !important; background: #efedff !important; color: var(--accent) !important; }
+    div[data-testid="stTab"] .react-aria-SelectionIndicator { display: none !important; }
   .stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 750; }
   @keyframes lift-in { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-    @media (max-width: 900px) { .chain { grid-template-columns: repeat(2, minmax(120px, 1fr)); } [data-baseweb="tab-list"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 900px) { .chain { grid-template-columns: repeat(2, minmax(120px, 1fr)); } div[role="tablist"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 """
 
