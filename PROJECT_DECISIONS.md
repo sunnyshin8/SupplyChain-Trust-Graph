@@ -6,7 +6,7 @@ The MVP uses one FastAPI/MCP service with internal workflow methods. This keeps 
 
 ## Next.js business experience
 
-The dashboard uses Next.js App Router and TypeScript. It is a light enterprise interface using warm white, indigo, cobalt, amber, and coral—no dark theme, neon treatment, or green status language. Motion communicates data flow and state changes while respecting `prefers-reduced-motion`.
+The dashboard uses Next.js App Router and TypeScript. It is a light enterprise interface using warm white, indigo, cobalt, amber, and coral no dark theme, neon treatment, or green status language. Motion communicates data flow and state changes while respecting `prefers-reduced-motion`.
 
 ## Deterministic local first, Snowflake ready
 

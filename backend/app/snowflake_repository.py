@@ -12,6 +12,12 @@ from zoneinfo import ZoneInfo
 from .data import FixtureRepository
 
 
+PUBLIC_READONLY_ROLE = "SUPPLYCHAIN_APP_READONLY"
+SESSION_IDENTITY_QUERY = """
+    SELECT CURRENT_ROLE() AS ACTIVE_ROLE,
+           CURRENT_SECONDARY_ROLES() AS SECONDARY_ROLES
+"""
+
 ENTITY_QUERIES = {
     "suppliers": """
         SELECT SUPPLIER_ID, SUPPLIER_NAME, COUNTRY, RISK_TIER, STATUS,
@@ -80,6 +86,36 @@ def _normalise_row(row: dict[str, Any]) -> dict[str, Any]:
     return {key.lower(): _json_value(value) for key, value in row.items()}
 
 
+def _timeout_seconds(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _connection_timeouts() -> dict[str, int]:
+    """Bound login and request waits so a stalled network cannot hang a session."""
+
+    return {
+        "login_timeout": _timeout_seconds("SNOWFLAKE_LOGIN_TIMEOUT_SECONDS", 20),
+        "network_timeout": _timeout_seconds("SNOWFLAKE_NETWORK_TIMEOUT_SECONDS", 60),
+    }
+
+
+def _secondary_roles(value: Any) -> list[str] | None:
+    """Parse CURRENT_SECONDARY_ROLES(); None means the format was not recognised."""
+
+    if value in (None, ""):
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return [role.strip() for role in str(parsed.get("roles") or "").split(",") if role.strip()]
+
+
 def _metric_pair(row: dict[str, Any] | None) -> dict[str, int] | None:
     if not row:
         return None
@@ -116,8 +152,15 @@ class SnowflakeRepository(FixtureRepository):
             int(os.getenv("SUPPLYCHAIN_SNAPSHOT_TTL_SECONDS", "30")),
         )
         self._next_refresh_at = 0.0
+        self.session_identity: dict[str, Any] = {}
+        self._released = False
         self._connection = self._connect()
-        self._load()
+        try:
+            self._load()
+        except Exception:
+            # Never leave a half-initialised session open behind a failed snapshot.
+            self.close()
+            raise
 
     def _connect(self):
         try:
@@ -132,6 +175,8 @@ class SnowflakeRepository(FixtureRepository):
             or os.getenv("SNOWFLAKE_PRIVATE_KEY_PEM", "")
         ).replace("\\n", "\n").strip()
         token_path = os.getenv("SNOWFLAKE_TOKEN_PATH", "/snowflake/session/token")
+        timeouts = _connection_timeouts()
+        self.readonly_identity_required = False
         if os.path.isfile(token_path):
             with open(token_path, encoding="utf-8") as token_file:
                 token = token_file.read().strip()
@@ -148,6 +193,7 @@ class SnowflakeRepository(FixtureRepository):
                 token=token,
                 warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
                 database="SUPPLYCHAIN_TRUST_GRAPH",
+                **timeouts,
             )
             self.connection_name = "SPCS_SERVICE_IDENTITY"
         elif private_key_pem:
@@ -197,20 +243,35 @@ class SnowflakeRepository(FixtureRepository):
                     or os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")
                 ),
                 database="SUPPLYCHAIN_TRUST_GRAPH",
+                **timeouts,
             )
             self.connection_name = "STREAMLIT_READONLY_SERVICE_IDENTITY"
+            self.readonly_identity_required = True
         else:
             if not self.connection_name:
                 raise RuntimeError("SNOWFLAKE_CONNECTION_NAME is required outside SPCS.")
-            connection = snowflake.connector.connect(connection_name=self.connection_name)
-        connection.autocommit(False)
-        # Do not let a developer's secondary roles (for example ACCOUNTADMIN)
-        # silently widen the application's least-privilege runtime boundary.
-        with connection.cursor() as cursor:
-            cursor.execute("USE SECONDARY ROLES NONE")
+            connection = snowflake.connector.connect(
+                connection_name=self.connection_name,
+                **timeouts,
+            )
+        try:
+            connection.autocommit(False)
+            # Do not let a developer's secondary roles (for example ACCOUNTADMIN)
+            # silently widen the application's least-privilege runtime boundary.
+            with connection.cursor() as cursor:
+                cursor.execute("USE SECONDARY ROLES NONE")
+        except Exception:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            raise
         return connection
 
     def _reconnect(self) -> None:
+        if getattr(self, "_released", False):
+            # A released runtime must not silently open a replacement session.
+            raise RuntimeError("This Snowflake repository has been released.")
         connection = getattr(self, "_connection", None)
         if connection is not None:
             try:
@@ -234,13 +295,44 @@ class SnowflakeRepository(FixtureRepository):
         from snowflake.connector import DictCursor
 
         with self.lock:
-            self._ensure_connection()
-            with self._connection.cursor(DictCursor) as cursor:
-                cursor.execute(sql, params)
-                self._remember(cursor)
-                return [_normalise_row(row) for row in cursor.fetchall()]
+            # Reads are idempotent, so retry once on a fresh session when an
+            # expired or dropped connection fails without reporting is_closed().
+            for attempt in range(2):
+                try:
+                    self._ensure_connection()
+                    with self._connection.cursor(DictCursor) as cursor:
+                        cursor.execute(sql, params)
+                        self._remember(cursor)
+                        return [_normalise_row(row) for row in cursor.fetchall()]
+                except Exception:
+                    if attempt == 1:
+                        raise
+                    self._reconnect()
+        raise RuntimeError("Snowflake read failed")
+
+    def _verify_session_identity(self) -> dict[str, Any]:
+        rows = self._fetch(SESSION_IDENTITY_QUERY)
+        row = rows[0] if rows else {}
+        active_role = str(row.get("active_role") or "").strip().upper()
+        if (
+            getattr(self, "readonly_identity_required", False)
+            and active_role != PUBLIC_READONLY_ROLE
+        ):
+            raise RuntimeError(
+                "The public key-pair session is not running as SUPPLYCHAIN_APP_READONLY."
+            )
+        secondary_roles = _secondary_roles(row.get("secondary_roles"))
+        if secondary_roles:
+            raise RuntimeError("Secondary roles must remain disabled for governed reads.")
+        return {
+            "active_role": active_role or "UNKNOWN",
+            "secondary_roles": "NONE" if secondary_roles == [] else "UNVERIFIED",
+            "connection_identity": self.connection_name,
+        }
 
     def _load(self) -> None:
+        # Fail closed before reading any governed data under an unexpected role.
+        session_identity = self._verify_session_identity()
         loaded: dict[str, list[dict[str, Any]]] = {}
         for entity, query in ENTITY_QUERIES.items():
             loaded[entity] = self._fetch(query)
@@ -266,7 +358,7 @@ class SnowflakeRepository(FixtureRepository):
             """
         )
         idempotency = []
-        if not self._key_pair_settings:
+        if not getattr(self, "readonly_identity_required", False):
             idempotency = self._fetch(
                 """
                 SELECT CACHE_KEY, RESULT
@@ -302,6 +394,7 @@ class SnowflakeRepository(FixtureRepository):
         )
 
         with self.lock:
+            self.session_identity = session_identity
             self._data = loaded
             self.mitigation_actions = actions
             self.audit_events = audits
@@ -352,6 +445,7 @@ class SnowflakeRepository(FixtureRepository):
         }
         status["snapshot_ttl_seconds"] = self._snapshot_ttl_seconds
         status["semantic_validation"] = self.semantic_validation
+        status["session_identity"] = dict(self.session_identity)
         return status
 
     def health_check(self) -> dict[str, Any]:
@@ -544,6 +638,13 @@ class SnowflakeRepository(FixtureRepository):
             super().apply_decision_with_audit(action, event, cache_key, previous_version)
 
     def close(self) -> None:
-        connection = getattr(self, "_connection", None)
-        if connection is not None and not connection.is_closed():
-            connection.close()
+        with self.lock:
+            self._released = True
+            connection = getattr(self, "_connection", None)
+            if connection is None:
+                return
+            try:
+                if not connection.is_closed():
+                    connection.close()
+            except Exception:
+                pass

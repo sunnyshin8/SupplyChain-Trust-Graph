@@ -1,11 +1,11 @@
-ARG BUILDPLATFORM=linux/amd64
+ARG NATIVE_BUILDPLATFORM=linux/amd64
 
-FROM --platform=${BUILDPLATFORM} node:22-bookworm-slim AS dependencies
+FROM --platform=${NATIVE_BUILDPLATFORM} node:22-bookworm-slim AS dependencies
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
-FROM --platform=${BUILDPLATFORM} node:22-bookworm-slim AS builder
+FROM --platform=${NATIVE_BUILDPLATFORM} node:22-bookworm-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_OUTPUT=export

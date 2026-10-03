@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from backend.app.snowflake_repository import SnowflakeRepository
 from backend.app.snowflake_repository import _metric_pair
 from scripts.validate_snowflake_runtime import _explicit_assertion_failed
 
@@ -134,7 +137,7 @@ def test_hosted_frontend_is_a_portable_static_export_with_same_origin_api_proxy(
     config = (ROOT / "frontend" / "next.config.ts").read_text()
 
     assert "NEXT_OUTPUT=export" in dockerfile
-    assert "FROM --platform=${BUILDPLATFORM}" in dockerfile
+    assert "FROM --platform=${NATIVE_BUILDPLATFORM}" in dockerfile
     assert "nginx-unprivileged" in dockerfile
     assert "proxy_pass http://127.0.0.1:8000" in nginx
     assert "Sf-Context-Current-User" in nginx
@@ -150,3 +153,77 @@ def test_live_health_probe_reconnects_with_a_fresh_service_token() -> None:
     assert "self._reconnect()" in repository
     assert 'cursor.execute("SELECT 1")' in repository
     assert '"dependency": service.repo.health_check()' in api
+
+
+def test_public_streamlit_showcase_is_read_only_and_key_pair_scoped() -> None:
+    repository = (ROOT / "backend" / "app" / "snowflake_repository.py").read_text()
+    showcase = (ROOT / "streamlit_app.py").read_text()
+
+    assert 'os.getenv("SNOWFLAKE_PRIVATE_KEY_PEM"' in repository
+    assert 'role.upper() != "SUPPLYCHAIN_APP_READONLY"' in repository
+    assert 'cursor.execute("USE SECONDARY ROLES NONE")' in repository
+    assert "record_audit=False" in showcase
+    assert "Prepare read-only draft preview" in showcase
+    assert "Approval requires an authenticated independent reviewer" in showcase
+    assert "draft_mitigation(" not in showcase
+    assert "approve_mitigation(" not in showcase
+
+
+def test_external_key_pair_connection_is_locked_to_readonly_role(monkeypatch) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import snowflake.connector
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "ORG-ACCOUNT")
+    monkeypatch.setenv("SNOWFLAKE_USER", "SUPPLYCHAIN_STREAMLIT_SVC")
+    monkeypatch.setenv("SNOWFLAKE_PRIVATE_KEY_PEM", pem)
+    monkeypatch.setenv("SNOWFLAKE_ROLE", "SUPPLYCHAIN_APP_READONLY")
+    captured: dict = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def execute(self, sql):
+            assert sql == "USE SECONDARY ROLES NONE"
+
+    class FakeConnection:
+        def __init__(self):
+            self.autocommit_value = None
+
+        def autocommit(self, value):
+            self.autocommit_value = value
+
+        def cursor(self):
+            return FakeCursor()
+
+    expected_connection = FakeConnection()
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        return expected_connection
+
+    monkeypatch.setattr(snowflake.connector, "connect", fake_connect)
+    repository = SnowflakeRepository.__new__(SnowflakeRepository)
+    repository.connection_name = None
+
+    assert repository._connect() is expected_connection
+    assert captured["user"] == "SUPPLYCHAIN_STREAMLIT_SVC"
+    assert captured["role"] == "SUPPLYCHAIN_APP_READONLY"
+    assert captured["database"] == "SUPPLYCHAIN_TRUST_GRAPH"
+    assert isinstance(captured["private_key"], bytes)
+    assert expected_connection.autocommit_value is False
+    assert repository.connection_name == "STREAMLIT_READONLY_SERVICE_IDENTITY"
+
+    monkeypatch.setenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN")
+    with pytest.raises(RuntimeError, match="restricted to SUPPLYCHAIN_APP_READONLY"):
+        repository._connect()

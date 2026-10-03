@@ -266,7 +266,7 @@ def deploy(
         ]
         if name == "web":
             build_command.extend(
-                ["--build-arg", f"BUILDPLATFORM=linux/{builder_architecture}"]
+                ["--build-arg", f"NATIVE_BUILDPLATFORM=linux/{builder_architecture}"]
             )
         build_command.append(".")
         _run(build_command)

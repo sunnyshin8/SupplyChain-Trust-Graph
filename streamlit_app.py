@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 import json
 import os
 from typing import Any
@@ -159,7 +160,7 @@ def _configure_environment() -> dict[str, str] | None:
     try:
         secret_values = st.secrets.to_dict()
     except (KeyError, FileNotFoundError):
-        return False
+        return None
     values = secret_values.get("snowflake", secret_values)
 
     mapping = {
@@ -214,7 +215,7 @@ def _runtime() -> Runtime:
             service=SupplyChainService(repository),
             repository=repository,
             live=False,
-            error=f"Live Snowflake connection unavailable: {exc}",
+            error="Live Snowflake is temporarily unavailable.",
         )
     except Exception as exc:  # fail closed into an explicitly labelled preview
         repository = FixtureRepository()
@@ -265,15 +266,26 @@ def read_only_answer(question: str, analysis: dict[str, Any]) -> tuple[str, list
     if "alternative" in lower or "supplier" in lower and "approved" in lower:
         options: list[dict[str, Any]] = []
         for part in analysis["affected_parts"]:
-            plant = next(
-                item["plant_id"]
-                for item in analysis["affected_shipments"]
-                if item["part_id"] == part["part_id"]
+            shipment = next(
+                (
+                    item
+                    for item in analysis["affected_shipments"]
+                    if item["part_id"] == part["part_id"]
+                ),
+                None,
             )
+            if shipment is None:
+                continue
+            plant = shipment["plant_id"]
             result = service.list_approved_alternatives(
                 part["part_id"], plant, analysis["delay_days"], analysis["supplier"]["supplier_id"]
             )
             options.extend(result["approved_alternatives"])
+        if not options:
+            return (
+                "No approved alternative is available for the governed disruption context.",
+                [],
+            )
         best = sorted(options, key=lambda item: item["recommendation_rank"])[0]
         return (
             f"{best['supplier_id']} ranks first for {best['part_id']} at {best['plant_id']}: "
@@ -296,6 +308,20 @@ def read_only_answer(question: str, analysis: dict[str, Any]) -> tuple[str, list
     )
 
 
+try:
+    supplier_options = sorted(
+        {
+            event["supplier_id"]
+            for event in runtime.repository.all("disruption_events")
+            if event.get("supplier_id")
+        }
+    )
+except Exception:
+    supplier_options = ["SUP-042"]
+if not supplier_options:
+    supplier_options = ["SUP-042"]
+
+
 with st.sidebar:
     st.markdown("### SupplyChain Trust Graph")
     st.caption("Governed disruption intelligence")
@@ -306,7 +332,7 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.divider()
-    supplier_id = st.selectbox("Disrupted supplier", ["SUP-042"], index=0)
+    supplier_id = st.selectbox("Disrupted supplier", supplier_options, index=0)
     delay_days = st.slider("Delay scenario", min_value=1, max_value=30, value=14, step=1)
     st.caption("Scenario changes projections only; source records remain immutable.")
     st.divider()
@@ -317,6 +343,9 @@ with st.sidebar:
         st.markdown("🟠 **Governed fixture preview**")
         st.caption(runtime.error or "Live source unavailable")
     if st.button("Refresh governed snapshot", width="stretch"):
+        close = getattr(runtime.repository, "close", None)
+        if callable(close):
+            close()
         st.cache_resource.clear()
         st.rerun()
     st.divider()
@@ -341,8 +370,11 @@ try:
     )
     metrics = service.governed_metrics()
 except Exception as exc:
-    st.error(f"Governed analysis unavailable: {exc}")
-    st.stop()
+    if app_page == "Decision workspace":
+        st.error("Governed analysis is temporarily unavailable. Please refresh the snapshot.")
+        st.stop()
+    analysis = {}
+    metrics = {}
 
 
 if app_page == "Our story":
@@ -428,7 +460,10 @@ st.markdown(
 
 summary = analysis["risk_summary"]
 st.markdown(
-    f"<div class='risk-banner'><strong>{summary['severity']} · {supplier_id}</strong>   {summary['narrative']}</div>",
+    "<div class='risk-banner'><strong>"
+    f"{escape(str(summary['severity']))} · {escape(str(supplier_id))}"
+    "</strong> "
+    f"{escape(str(summary['narrative']))}</div>",
     unsafe_allow_html=True,
 )
 

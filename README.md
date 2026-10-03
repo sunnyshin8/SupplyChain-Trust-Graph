@@ -1,6 +1,6 @@
 # SupplyChain Trust Graph
 
-Supplier disruptions are usually detected in one system, explained in another, and acted on in a third. By the time an operations team connects the affected parts, plants, shipments, customer orders, and qualified alternatives, the commercial impact may already have grown—and a fast response can still introduce new risk if it relies on an unapproved supplier or an unaudited action.
+Supplier disruptions are usually detected in one system, explained in another, and acted on in a third. By the time an operations team connects the affected parts, plants, shipments, customer orders, and qualified alternatives, the commercial impact may already have grown and a fast response can still introduce new risk if it relies on an unapproved supplier or an unaudited action.
 
 **SupplyChain Trust Graph closes that decision gap.** It traces a disruption through a governed business graph, calculates impact with deterministic metrics, proves every answer with source evidence, ranks only qualified recovery options, and keeps mitigation behind an explicit human-approval boundary.
 
@@ -19,6 +19,7 @@ Supplier disruptions are usually detected in one system, explained in another, a
 - **Durable governance:** Snowflake separates private source data, read-only analytics, workflow state, and append-only audit evidence.
 - **Repeatable agent workflows:** Snowflake CoCo CLI discovers project skills for modeling, investigation, analysis, mitigation, and trust evaluation.
 - **Snowflake-hosted UX:** a Next.js control tower and FastAPI service are packaged as Linux/AMD64 containers for a single Snowpark Container Services deployment.
+- **Public read-only showcase:** a Streamlit Community Cloud surface reads the same Snowflake-governed contracts without requiring visitors to hold a Snowflake account.
 
 ## Reference scenario
 
@@ -67,6 +68,8 @@ Analysis, recommendation, drafting, approval, and execution are deliberately sep
 flowchart TB
     UI[Next.js operations dashboard] --> API[FastAPI REST adapter]
     SPCS[Snowpark Container Services ingress] --> UI
+    PUBLIC[Public Streamlit showcase] --> READONLY[Read-only service identity]
+    READONLY --> GOVERNED
     COCO[Snowflake CoCo CLI] --> MCP[Supply Chain MCP server]
     COCO --> ANALYST[Cortex Analyst]
     API --> ENGINE[Deterministic workflow engine]
@@ -346,7 +349,7 @@ make snowflake-host \
   PODMAN_MACHINE=zentro-podman
 ```
 
-The deployer creates `APP.SUPPLYCHAIN_IMAGES` and `SUPPLYCHAIN_APP_POOL`, builds immutable API/web tags, updates the service specification, waits for both readiness probes, and returns the Snowflake ingress URL. `SUPPLYCHAIN_PLANNER_USERS` and `SUPPLYCHAIN_APPROVER_USERS` are server-side user mappings and must be non-empty, non-overlapping Snowflake usernames. Human users receive only `SUPPLYCHAIN_APP_READONLY` plus the endpoint's `UI_USAGE` service role—never `SUPPLYCHAIN_APP_RUNTIME`. The service owner inherits the non-human runtime data role; its temporary `CREATE SERVICE` and `BIND SERVICE ENDPOINT` grants are revoked after deployment.
+The deployer creates `APP.SUPPLYCHAIN_IMAGES` and `SUPPLYCHAIN_APP_POOL`, builds immutable API/web tags, updates the service specification, waits for both readiness probes, and returns the Snowflake ingress URL. `SUPPLYCHAIN_PLANNER_USERS` and `SUPPLYCHAIN_APPROVER_USERS` are server-side user mappings and must be non-empty, non-overlapping Snowflake usernames. Human users receive only `SUPPLYCHAIN_APP_READONLY` plus the endpoint's `UI_USAGE` service role never `SUPPLYCHAIN_APP_RUNTIME`. The service owner inherits the non-human runtime data role; its temporary `CREATE SERVICE` and `BIND SERVICE ENDPOINT` grants are revoked after deployment.
 
 The web build is a Next.js static export served by an unprivileged AMD64 Nginx container. `/api/*` stays same-origin and is proxied to the colocated FastAPI container, including Snowflake's authenticated ingress identity header. This avoids shipping build-machine-native Node artifacts into the Snowflake runtime. The API readiness probe executes `SELECT 1`; if the session has closed, it re-reads the mounted Snowflake token and reconnects once before failing unhealthy.
 
@@ -363,6 +366,51 @@ Resume before a demonstration:
 ALTER COMPUTE POOL SUPPLYCHAIN_APP_POOL RESUME;
 ALTER SERVICE SUPPLYCHAIN_TRUST_GRAPH.APP.SUPPLYCHAIN_TRUST_GRAPH_SERVICE RESUME;
 ```
+
+## Public no-login showcase
+
+`streamlit_app.py` provides a separate public presentation boundary for viewers who do not have a Snowflake account. It is designed for Streamlit Community Cloud and connects directly to the same `GOVERNED` views with a dedicated key-pair service identity that holds only `SUPPLYCHAIN_APP_READONLY`.
+
+The public surface supports:
+
+- the supplier-to-customer blast radius;
+- governed revenue, order, stockout, and delivery metrics;
+- 3/7/14/21-day scenario comparison;
+- deterministic conversational routing;
+- source evidence downloads;
+- approved-alternative ranking; and
+- existing audit evidence.
+
+It intentionally cannot insert a mitigation, approve a decision, change roles, execute generated SQL, or call an ERP system. “Prepare draft” creates a clearly labelled browser-session preview only. The authenticated SPCS application remains the authoritative planner → independent reviewer workflow.
+
+Run it locally in governed fixture mode:
+
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+For a local live-data check, use an existing named Snowflake connection:
+
+```bash
+SNOWFLAKE_CONNECTION_NAME=supplychain-hackathon \
+streamlit run streamlit_app.py
+```
+
+The deployed app reads these Streamlit secrets, configured in Community Cloud rather than committed to Git:
+
+```toml
+[snowflake]
+account = "<organization-account>"
+user = "SUPPLYCHAIN_STREAMLIT_SVC"
+private_key = """-----BEGIN PRIVATE KEY-----
+<private-key-material>
+-----END PRIVATE KEY-----"""
+role = "SUPPLYCHAIN_APP_READONLY"
+warehouse = "COMPUTE_WH"
+```
+
+The connector rejects any externally supplied role other than `SUPPLYCHAIN_APP_READONLY`, disables secondary roles after connecting, and never logs secret values. `.streamlit/secrets.toml` is ignored by Git.
 
 ### Durable workflow verification
 

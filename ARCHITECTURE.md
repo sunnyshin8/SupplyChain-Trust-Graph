@@ -57,6 +57,7 @@ sequenceDiagram
 5. **Audit boundary:** investigation, conversation, draft, and approval events are separately attributable through a correlation ID.
 6. **Concurrency boundary:** action versions plus idempotency keys prevent stale or duplicate decisions.
 7. **Failure boundary:** the frontend preserves the last verified state and never simulates success when the API fails.
+8. **Public showcase boundary:** anonymous Streamlit sessions receive governed read-only data; draft and approval controls never write to Snowflake.
 
 ## Repository modes
 
@@ -66,5 +67,7 @@ The service selects its repository at startup:
 - `SUPPLYCHAIN_DATA_MODE=snowflake` uses `SnowflakeRepository` with the profile named by `SNOWFLAKE_CONNECTION_NAME`.
 
 The Snowflake adapter reads only governed entity views, records query IDs, and persists draft/decision/idempotency state in `WORKFLOW` plus evidence in the append-only `AUDIT` zone. `SOURCE` is private, `GOVERNED` is read-only to the application, and the legacy `CORE` compatibility zone is denied to application roles. The adapter disables inherited secondary roles on every application connection, so a developer who also holds `ACCOUNTADMIN` cannot silently widen the runtime boundary. It uses a short controlled snapshot TTL for fast repeated graph traversal without requiring a process restart to see changes. Action and audit writes use an explicit non-autocommit transaction. A decision update is conditional on the previous action version and pending status, so concurrent stale approvals fail closed. CoCo CLI and the Python connector share the same password-free profile in `~/.snowflake/connections.toml`; credentials never enter the repository.
+
+The public Streamlit deployment uses the same adapter with key-pair authentication and a dedicated service user that receives only `SUPPLYCHAIN_APP_READONLY`. The app calls analysis methods with audit writes disabled and does not expose workflow mutations. This keeps public visualization separate from the authenticated SPCS decision boundary while preserving Snowflake as the governed data source.
 
 CoCo has two explicit paths. Its registered MCP server drives the deterministic workflow tools. Its credit-backed Cortex Analyst command targets the native semantic view, while a local harness permits only the semantic object or its declared `GOVERNED.ORDER_RISK` logical table before executing generated SQL. The deployed secure Cortex Agent wraps the same Analyst resource with no mutation or external-execution tool; the current trial account blocks native Agent invocation, so it is a ready integration rather than a claimed successful runtime path.

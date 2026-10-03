@@ -281,7 +281,7 @@ function App() {
       })
       .catch(() => {
         setMode('preview')
-        setToast({ message: 'Governed API unavailable — showing unverified preview data only', tone: 'error' })
+        setToast({ message: 'Governed API unavailable   showing unverified preview data only', tone: 'error' })
       })
   }, [])
 
@@ -378,7 +378,7 @@ function App() {
         tone: answer.status === 'ANSWERED' ? 'success' : 'info',
       })
     } catch (error) {
-      setToast({ message: `${error instanceof Error ? error.message : 'Governed answer failed'} — no answer was fabricated`, tone: 'error' })
+      setToast({ message: `${error instanceof Error ? error.message : 'Governed answer failed'}   no answer was fabricated`, tone: 'error' })
     } finally {
       setAsking(false)
     }
@@ -401,7 +401,7 @@ function App() {
     } catch (error) {
       await new Promise((resolve) => window.setTimeout(resolve, 700))
       setMode('preview')
-      setToast({ message: `${error instanceof Error ? error.message : 'Investigation failed'} — last verified result preserved`, tone: 'error' })
+      setToast({ message: `${error instanceof Error ? error.message : 'Investigation failed'}   last verified result preserved`, tone: 'error' })
     } finally {
       setInvestigating(false)
     }
@@ -431,9 +431,9 @@ function App() {
         ...current.filter((item) => item.action_id !== created.action_id),
       ])
       setMode('api')
-      setToast({ message: 'Governed draft created — switch to Aisha for an independent decision', tone: 'success' })
+      setToast({ message: 'Governed draft created   switch to Aisha for an independent decision', tone: 'success' })
     } catch (error) {
-      setToast({ message: `${error instanceof Error ? error.message : 'Draft rejected'} — no draft was created`, tone: 'error' })
+      setToast({ message: `${error instanceof Error ? error.message : 'Draft rejected'}   no draft was created`, tone: 'error' })
     } finally {
       setDrafting(false)
     }
@@ -461,7 +461,7 @@ function App() {
       setPendingMitigations((current) => current.filter((item) => item.action_id !== approved.action_id))
       setToast({ message: 'Human approval recorded after all policy checks passed', tone: 'success' })
     } catch (error) {
-      setToast({ message: `${error instanceof Error ? error.message : 'Approval failed'} — pending state preserved`, tone: 'error' })
+      setToast({ message: `${error instanceof Error ? error.message : 'Approval failed'}   pending state preserved`, tone: 'error' })
     } finally {
       setApproving(false)
     }
@@ -489,9 +489,9 @@ function App() {
       setMitigation(returned)
       setPendingMitigations((current) => current.filter((item) => item.action_id !== returned.action_id))
       setMode('api')
-      setToast({ message: 'Draft returned for revision — no external action executed', tone: 'success' })
+      setToast({ message: 'Draft returned for revision   no external action executed', tone: 'success' })
     } catch (error) {
-      setToast({ message: `${error instanceof Error ? error.message : 'Revision decision failed'} — pending state preserved`, tone: 'error' })
+      setToast({ message: `${error instanceof Error ? error.message : 'Revision decision failed'}   pending state preserved`, tone: 'error' })
     } finally {
       setReturning(false)
     }

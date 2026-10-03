@@ -21,9 +21,9 @@ Verified on 2026-09-30 against the live Snowflake account. No password, OAuth co
 
 `make coco-analyst-eval` now runs a repeatable three-question evaluation through the installed CoCo CLI and Snowflake Cortex Analyst. It accepts only one read-only statement and only the declared semantic view or its declared `GOVERNED.ORDER_RISK` logical table; DDL, DML, multiple statements, `CORE`, `SOURCE`, workflow, audit, and unknown relations are rejected before execution. All three live cases passed:
 
-- golden metrics: `$586,000`, 3 orders, `SUP-042` — CoCo request `dd61ab56-d691-433a-bef6-aa6d64117bf2`; Snowflake query `01c76b94-000e-08bd-0002-51660008a0ca`
-- affected orders: `SO-7101`, `SO-7102`, and `SO-7103`, with the expected customer names and tiers — CoCo request `77284144-069d-48ad-8c44-f927d8028b3e`; Snowflake query `01c76b94-000e-0899-0002-5166000890f2`
-- plant breakdown: Pune `$390,000` / 2 orders and Bengaluru `$196,000` / 1 order — CoCo request `deb01c4f-4155-46ed-bb13-c46563d3f066`; Snowflake query `01c76b94-000e-08bd-0002-51660008a0ce`
+- golden metrics: `$586,000`, 3 orders, `SUP-042`   CoCo request `dd61ab56-d691-433a-bef6-aa6d64117bf2`; Snowflake query `01c76b94-000e-08bd-0002-51660008a0ca`
+- affected orders: `SO-7101`, `SO-7102`, and `SO-7103`, with the expected customer names and tiers   CoCo request `77284144-069d-48ad-8c44-f927d8028b3e`; Snowflake query `01c76b94-000e-0899-0002-5166000890f2`
+- plant breakdown: Pune `$390,000` / 2 orders and Bengaluru `$196,000` / 1 order   CoCo request `deb01c4f-4155-46ed-bb13-c46563d3f066`; Snowflake query `01c76b94-000e-08bd-0002-51660008a0ce`
 
 The suite persisted one attributable `CORTEX_ANALYST_EVAL` audit event, `AUD-COCO-EVAL-7FE3B17F`, with `SOURCE_SYSTEM='COCO_CLI'`. Insert query: `01c76b94-000e-08ab-0002-516600090016`; uniqueness proof: `01c76b94-000e-08ab-0002-51660009001a`.
 
@@ -57,14 +57,14 @@ That leaves account entitlement/trial type as the likely blocker. Snowflake docu
 
 The approved `ACCOUNTADMIN` deployment completed on 2026-09-30 using the existing `COMPUTE_WH`; the harness did not create a warehouse.
 
-- `001_schema.sql`: PASS — database/schema, governed tables, append-only audit and idempotency tables, `SUPPLYCHAIN_APP_READONLY` and `SUPPLYCHAIN_APP_RUNTIME` roles/grants.
-- `002_seed.sql`: PASS — deterministic demo data.
-- `003_governed_semantic_views.sql`: PASS — governed relational views and the native semantic view. Golden result: `$586,000`, 3 affected orders, supplier `SUP-042` (query ID `01c769c5-000e-089a-0002-516600083122`).
-- `004_validation.sql`: PASS — golden metric and unapproved-supplier negative control (last validation query ID `01c769c5-000e-0899-0002-516600081166`).
-- `005_security_zones.sql`: PASS — private `SOURCE`, read-only `GOVERNED`, mutable `WORKFLOW`, append-only `AUDIT`, migrated state, and direct legacy-object isolation (query ID `01c769c5-000e-089a-0002-516600083156`).
-- `006_core_isolation_fix.sql`: PASS — residual grants materialized by the earlier future-view grant are absent (query ID `01c76a10-000e-089a-0002-5166000832de`).
-- `007_cortex_agent.sql`: PASS — secure, read-only Cortex Agent, dedicated agent database-role grants, and existence assertion (query ID `01c76a10-000e-08ab-0002-5166000870ea`).
-- `008_quantity_aware_scenarios.sql`: PASS — forward-only quantity-aware allocation, governed/semantic view parity, and `$586,000` / 3-order baseline assertion (query ID `01c76b93-000e-08ce-0002-51660009100a`).
+- `001_schema.sql`: PASS   database/schema, governed tables, append-only audit and idempotency tables, `SUPPLYCHAIN_APP_READONLY` and `SUPPLYCHAIN_APP_RUNTIME` roles/grants.
+- `002_seed.sql`: PASS   deterministic demo data.
+- `003_governed_semantic_views.sql`: PASS   governed relational views and the native semantic view. Golden result: `$586,000`, 3 affected orders, supplier `SUP-042` (query ID `01c769c5-000e-089a-0002-516600083122`).
+- `004_validation.sql`: PASS   golden metric and unapproved-supplier negative control (last validation query ID `01c769c5-000e-0899-0002-516600081166`).
+- `005_security_zones.sql`: PASS   private `SOURCE`, read-only `GOVERNED`, mutable `WORKFLOW`, append-only `AUDIT`, migrated state, and direct legacy-object isolation (query ID `01c769c5-000e-089a-0002-516600083156`).
+- `006_core_isolation_fix.sql`: PASS   residual grants materialized by the earlier future-view grant are absent (query ID `01c76a10-000e-089a-0002-5166000832de`).
+- `007_cortex_agent.sql`: PASS   secure, read-only Cortex Agent, dedicated agent database-role grants, and existence assertion (query ID `01c76a10-000e-08ab-0002-5166000870ea`).
+- `008_quantity_aware_scenarios.sql`: PASS   forward-only quantity-aware allocation, governed/semantic view parity, and `$586,000` / 3-order baseline assertion (query ID `01c76b93-000e-08ce-0002-51660009100a`).
 
 The latest deployment context was account `KJ18976`, role `ACCOUNTADMIN`, warehouse `COMPUTE_WH`, region `AWS_AP_SOUTHEAST_7` (query ID `01c76a0f-000e-089a-0002-51660008328e`). The admin profile is deployment-only. The deploy harness was hardened to fail when an assertion query returns scalar `FAIL`; it no longer confuses statement execution with validation success.
 
@@ -73,8 +73,8 @@ The multi-delay metric-drift gate also passed 3/3 with secondary roles disabled:
 The runtime release gate then passed through the least-privilege `SUPPLYCHAIN_APP_RUNTIME` role:
 
 - context with secondary roles disabled: PASS (query ID `01c769c2-000e-07bd-0002-5166000850ce`)
-- golden governed metric: PASS — `$586,000` across 3 orders (query ID `01c769c2-000e-0886-0002-51660007f102`)
-- unapproved supplier exclusion: PASS — 0 leaked rows (query ID `01c769c2-000e-07bd-0002-5166000850d2`)
+- golden governed metric: PASS   `$586,000` across 3 orders (query ID `01c769c2-000e-0886-0002-51660007f102`)
+- unapproved supplier exclusion: PASS   0 leaked rows (query ID `01c769c2-000e-07bd-0002-5166000850d2`)
 - native semantic view query: PASS (query ID `01c769c2-000e-089a-0002-5166000830ea`)
 - `WORKFLOW` read: PASS (query ID `01c769c2-000e-07bd-0002-5166000850d6`)
 - `AUDIT` read: PASS (query ID `01c769c2-000e-089a-0002-5166000830ee`)
